@@ -1,0 +1,8 @@
+{
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "name": "Copy of Obsidian Vault AI検索OpenAI版",
+  "description": "",
+  "prompt": ""
+}

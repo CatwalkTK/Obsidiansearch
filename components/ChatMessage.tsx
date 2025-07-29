@@ -11,10 +11,48 @@ interface ChatMessageProps {
 const ChatMessage: React.FC<ChatMessageProps> = ({ message, isSpeaking }) => {
   const isModel = message.role === 'model';
 
-  const createMarkup = () => {
+  const createSafeMarkup = () => {
     if (isModel && message.content) {
-      const rawMarkup = marked.parse(message.content, { async: false }) as string;
-      return { __html: rawMarkup };
+      // Configure marked with security options
+      marked.setOptions({
+        sanitize: false, // We'll handle sanitization separately
+        gfm: true,
+        breaks: true,
+        // Disable HTML rendering to prevent XSS
+        renderer: new marked.Renderer()
+      });
+
+      // Create a custom renderer that strips HTML tags
+      const renderer = new marked.Renderer();
+      
+      // Override HTML rendering methods to prevent XSS
+      renderer.html = () => '';
+      renderer.code = (code: string, language?: string) => {
+        const escapedCode = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `<pre><code class="language-${language || ''}">${escapedCode}</code></pre>`;
+      };
+      renderer.codespan = (code: string) => {
+        const escapedCode = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `<code>${escapedCode}</code>`;
+      };
+
+      const rawMarkup = marked.parse(message.content, { 
+        async: false,
+        renderer: renderer
+      }) as string;
+      
+      // Additional HTML sanitization - remove potentially dangerous elements
+      const sanitizedMarkup = rawMarkup
+        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+        .replace(/<iframe\b[^>]*>/gi, '')
+        .replace(/<object\b[^>]*>/gi, '')
+        .replace(/<embed\b[^>]*>/gi, '')
+        .replace(/<form\b[^>]*>/gi, '')
+        .replace(/<input\b[^>]*>/gi, '')
+        .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '') // Remove event handlers
+        .replace(/javascript:/gi, ''); // Remove javascript: URLs
+
+      return { __html: sanitizedMarkup };
     }
     return { __html: '' };
   };
@@ -30,7 +68,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message, isSpeaking }) => {
         {isModel ? (
             <div 
                 className="markdown-body"
-                dangerouslySetInnerHTML={createMarkup()}
+                dangerouslySetInnerHTML={createSafeMarkup()}
             />
         ) : (
             <p className="text-white whitespace-pre-wrap">{message.content}</p>

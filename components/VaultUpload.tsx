@@ -18,11 +18,38 @@ const VaultUpload: React.FC<VaultUploadProps> = ({ onFilesSelected, onError, isP
   const [apiKey, setApiKey] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const validateApiKey = (key: string): boolean => {
+    // Basic API key validation
+    const trimmedKey = key.trim();
+    
+    // Check for empty key
+    if (!trimmedKey) {
+      return false;
+    }
+    
+    // Check for obviously invalid patterns
+    if (trimmedKey.length < 10) {
+      return false;
+    }
+    
+    // Check for potential injection attempts
+    if (/<script|javascript:|data:|vbscript:/i.test(trimmedKey)) {
+      return false;
+    }
+    
+    // Check for null bytes or control characters
+    if (/[\x00-\x1f\x7f-\x9f]/.test(trimmedKey)) {
+      return false;
+    }
+    
+    return true;
+  };
+
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
-    if (!apiKey.trim()) {
-        onError("続行する前にAPIキーを入力してください。");
+    if (!validateApiKey(apiKey)) {
+        onError("有効なAPIキーを入力してください。");
         return;
     }
     
@@ -60,14 +87,14 @@ const VaultUpload: React.FC<VaultUploadProps> = ({ onFilesSelected, onError, isP
   };
 
   const handleClick = () => {
-    if (!apiKey.trim()) {
-        onError("APIキーを入力してください。");
+    if (!validateApiKey(apiKey)) {
+        onError("有効なAPIキーを入力してください。");
         return;
     }
     fileInputRef.current?.click();
   };
 
-  const isUploadDisabled = !apiKey.trim() || isProcessing;
+  const isUploadDisabled = !validateApiKey(apiKey) || isProcessing;
 
   return (
     <div className="flex flex-col items-center justify-center h-full text-center p-8">
@@ -123,7 +150,7 @@ const VaultUpload: React.FC<VaultUploadProps> = ({ onFilesSelected, onError, isP
           <>
             <UploadIcon />
             <span className="mt-4 text-xl font-medium text-gray-300">Vaultフォルダを選択</span>
-            <p className="mt-1 text-sm text-gray-500">{!apiKey.trim() ? "続行するにはAPIキーを入力してください" : "ディレクトリ内のすべての`.md`ファイルが処理されます。"}</p>
+            <p className="mt-1 text-sm text-gray-500">{!validateApiKey(apiKey) ? "続行するには有効なAPIキーを入力してください" : "ディレクトリ内のすべての`.md`ファイルが処理されます。"}</p>
           </>
         )}
       </div>

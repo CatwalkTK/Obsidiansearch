@@ -51,7 +51,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       <header className="flex-shrink-0 bg-gray-800/50 backdrop-blur-sm p-4 border-b border-gray-700 flex justify-between items-center">
           <div className="w-10"></div> {/* Spacer */}
           <div className="text-center">
-            <h1 className="text-xl font-bold">Obsidian Vault AI</h1>
+            <h1 className="text-xl font-bold">社内ナレッジ可視化AI</h1>
             <p className="text-sm text-gray-400">{fileCount}個のマークダウンファイルをコンテキストとして読み込みました。</p>
           </div>
           <button 
@@ -89,7 +89,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             value={input}
             onChange={(e) => onInputChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={isRecording ? "話してください..." : "ノートについて質問を入力..."}
+            placeholder={isRecording ? "話してください..." : "社内ナレッジについて質問を入力..."}
             className="w-full bg-gray-700 border border-gray-600 rounded-lg py-3 px-4 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
             disabled={isLoading}
           />

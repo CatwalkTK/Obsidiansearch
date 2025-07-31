@@ -208,6 +208,7 @@ const App: React.FC = () => {
   const [isTtsEnabled, setIsTtsEnabled] = useState(false);
   const [speakingMessageIndex, setSpeakingMessageIndex] = useState<number | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [recognitionRetryCount, setRecognitionRetryCount] = useState(0);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   const handleError = useCallback((errorMessage: string) => {
@@ -218,7 +219,7 @@ const App: React.FC = () => {
 
   const handleSendMessage = useCallback(async (question: string) => {
     if (!docChunks || !apiConfig) {
-      setError("VaultのチャンクまたはAPI設定が読み込まれていません。");
+      setError("社内ナレッジのチャンクまたはAPI設定が読み込まれていません。");
       return;
     }
 
@@ -254,7 +255,7 @@ const App: React.FC = () => {
       }
 
       if (!context) {
-        const noContextMessage: Message = { id: Date.now().toString(), role: 'model', content: "提供されたVaultの情報の中から、その質問に対する回答を見つけることができませんでした。" };
+        const noContextMessage: Message = { id: Date.now().toString(), role: 'model', content: "提供された社内ナレッジの情報の中から、その質問に対する回答を見つけることができませんでした。" };
         setMessages(prev => [...prev, noContextMessage]);
         setLastQueryContext(null);
         setIsLoading(false);
@@ -285,6 +286,15 @@ const App: React.FC = () => {
       console.warn("このブラウザはWeb Speech APIをサポートしていません。");
       return;
     }
+    
+    // GitHub Codespacesなどでは音声認識が機能しない場合があるため、
+    // 一時的に無効化
+    if (window.location.hostname.includes('github.dev') || 
+        window.location.hostname.includes('gitpod.io') || 
+        window.location.hostname.includes('codespaces')) {
+      console.warn("開発環境では音声認識を無効化しています。");
+      return;
+    }
 
     const recognition = new SpeechRecognitionAPI();
     recognition.lang = 'ja-JP';
@@ -312,9 +322,27 @@ const App: React.FC = () => {
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error("SpeechRecognition error:", event.error);
         let errorMessage = `音声認識で予期せぬエラーが発生しました: ${event.error}`;
+        let shouldRetry = false;
+        
         switch (event.error) {
             case 'network':
-                errorMessage = '音声認識に失敗しました。インターネット接続を確認するか、しばらくしてからもう一度お試しください。';
+                if (recognitionRetryCount < 2) {
+                    shouldRetry = true;
+                    setRecognitionRetryCount(prev => prev + 1);
+                    console.log(`Network error, retrying... (${recognitionRetryCount + 1}/3)`);
+                    setTimeout(() => {
+                        try {
+                            recognitionRef.current?.start();
+                        } catch (e) {
+                            console.error("Retry failed:", e);
+                            handleError('音声認識の再試行に失敗しました。手動で入力してください。');
+                            setIsRecording(false);
+                        }
+                    }, 1000);
+                    return;
+                } else {
+                    errorMessage = '音声認識に失敗しました。ネットワーク接続が不安定です。手動で入力してください。';
+                }
                 break;
             case 'not-allowed':
             case 'service-not-allowed':
@@ -326,27 +354,34 @@ const App: React.FC = () => {
             case 'aborted':
                 // User aborted the recognition, no error message needed.
                 setIsRecording(false);
+                setRecognitionRetryCount(0);
                 return;
             case 'audio-capture':
                 errorMessage = 'マイクからの音声取得に失敗しました。マイクが正しく接続されているか確認してください。';
                 break;
         }
-        handleError(errorMessage);
-        setIsRecording(false);
+        
+        if (!shouldRetry) {
+            handleError(errorMessage);
+            setIsRecording(false);
+            setRecognitionRetryCount(0);
+        }
     };
     recognitionRef.current = recognition;
-  }, [handleError, handleSendMessage]);
+  }, [handleError, handleSendMessage, recognitionRetryCount]);
 
   const handleToggleRecording = () => {
     if (isRecording) {
       recognitionRef.current?.stop();
+      setRecognitionRetryCount(0);
     } else {
       if (isLoading) return;
       if (!navigator.onLine) {
-          handleError("音声認識にはインターネット接続が必要です。");
+          handleError("音声認識にはインターネット接続が必要です。手動で入力してください。");
           return;
       }
       setInput('');
+      setRecognitionRetryCount(0);
       try {
         recognitionRef.current?.start();
       } catch (e) {
@@ -422,7 +457,7 @@ const App: React.FC = () => {
         setDocChunks(newDocChunks);
         setFileCount(files.length);
         setMessages([
-            { id: Date.now().toString(), role: 'model', content: `こんにちは！Vaultから${files.length}個のファイルを処理し、${newDocChunks.length}個の知識チャンクを準備しました。何を知りたいですか？` }
+            { id: Date.now().toString(), role: 'model', content: `こんにちは！社内ナレッジから${files.length}個のファイルを処理し、${newDocChunks.length}個の知識チャンクを準備しました。何を知りたいですか？` }
         ]);
 
     } catch (e) {

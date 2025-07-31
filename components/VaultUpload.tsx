@@ -14,9 +14,31 @@ interface FileWithRelativePath extends File {
 }
 
 const VaultUpload: React.FC<VaultUploadProps> = ({ onFilesSelected, onError, isProcessing, processingMessage }) => {
-  const [provider, setProvider] = useState<ApiProvider>('gemini');
+  // Check for environment variables
+  const envGeminiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  const envOpenAIKey = process.env.OPENAI_API_KEY;
+  
+  // Auto-detect provider based on available keys
+  const getDefaultProvider = (): ApiProvider => {
+    if (envGeminiKey) return 'gemini';
+    if (envOpenAIKey) return 'openai';
+    return 'gemini';
+  };
+
+  const [provider, setProvider] = useState<ApiProvider>(getDefaultProvider());
   const [apiKey, setApiKey] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Check if we have environment API key
+  const hasEnvApiKey = !!(envGeminiKey || envOpenAIKey);
+  
+  // Debug logging
+  console.log('Environment check:', {
+    envGeminiKey: envGeminiKey ? 'Present' : 'Missing',
+    envOpenAIKey: envOpenAIKey ? 'Present' : 'Missing',
+    hasEnvApiKey,
+    provider
+  });
 
   const validateApiKey = (key: string): boolean => {
     // Basic API key validation
@@ -48,7 +70,13 @@ const VaultUpload: React.FC<VaultUploadProps> = ({ onFilesSelected, onError, isP
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
-    if (!validateApiKey(apiKey)) {
+    
+    // Use environment API key if available, otherwise use user input
+    const effectiveApiKey = hasEnvApiKey ? 
+      (provider === 'gemini' ? envGeminiKey : envOpenAIKey) || '' : 
+      apiKey;
+    
+    if (!hasEnvApiKey && !validateApiKey(apiKey)) {
         onError("有効なAPIキーを入力してください。");
         return;
     }
@@ -78,7 +106,7 @@ const VaultUpload: React.FC<VaultUploadProps> = ({ onFilesSelected, onError, isP
         })
       );
       
-      onFilesSelected(fileData, provider, apiKey);
+      onFilesSelected(fileData, provider, effectiveApiKey);
 
     } catch (error) {
         if(error instanceof Error) onError(error.message);
@@ -87,44 +115,54 @@ const VaultUpload: React.FC<VaultUploadProps> = ({ onFilesSelected, onError, isP
   };
 
   const handleClick = () => {
-    if (!validateApiKey(apiKey)) {
+    if (!hasEnvApiKey && !validateApiKey(apiKey)) {
         onError("有効なAPIキーを入力してください。");
         return;
     }
     fileInputRef.current?.click();
   };
 
-  const isUploadDisabled = !validateApiKey(apiKey) || isProcessing;
+  const isUploadDisabled = (!hasEnvApiKey && !validateApiKey(apiKey)) || isProcessing;
 
   return (
     <div className="flex flex-col items-center justify-center h-full text-center p-8">
-      <h1 className="text-4xl font-bold text-white mb-2">Obsidian Vault AI検索</h1>
+      <h1 className="text-4xl font-bold text-white mb-2">社内ナレッジ可視化AI</h1>
       <p className="text-lg text-gray-400 mb-8 max-w-2xl">
-        あなたのノートに眠る知識を解き放ちましょう。AIプロバイダーを選択し、APIキーを入力してから、Vaultディレクトリを選択してください。
+        社内に蓄積された知識を解き放ちましょう。{hasEnvApiKey ? 'ナレッジディレクトリを選択してください。' : 'AIプロバイダーを選択し、APIキーを入力してから、ナレッジディレクトリを選択してください。'}
       </p>
 
-      <div className="w-full max-w-lg mb-8 p-6 bg-gray-800/50 rounded-xl border border-gray-700">
-          <h2 className="text-xl font-semibold text-white mb-4">AIプロバイダー設定</h2>
-          <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-300 mb-2">LLMプロバイダーを選択</label>
-              <div className="flex justify-center gap-4">
-                  <button onClick={() => setProvider('gemini')} className={`px-4 py-2 rounded-lg font-semibold w-full transition-colors ${provider === 'gemini' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`} disabled={isProcessing}>Gemini</button>
-                  <button onClick={() => setProvider('openai')} className={`px-4 py-2 rounded-lg font-semibold w-full transition-colors ${provider === 'openai' ? 'bg-teal-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`} disabled={isProcessing}>OpenAI</button>
-              </div>
-          </div>
-          <div>
-              <label htmlFor="apiKey" className="block text-sm font-medium text-gray-300 mb-2">APIキー</label>
-              <input 
-                type="password"
-                id="apiKey"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={`${provider === 'gemini' ? 'Gemini' : 'OpenAI'} APIキーを入力してください`}
-                className="w-full bg-gray-700 border border-gray-600 rounded-lg py-2 px-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                disabled={isProcessing}
-              />
-          </div>
-      </div>
+      {!hasEnvApiKey && (
+        <div className="w-full max-w-lg mb-8 p-6 bg-gray-800/50 rounded-xl border border-gray-700">
+            <h2 className="text-xl font-semibold text-white mb-4">AIプロバイダー設定</h2>
+            <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-300 mb-2">LLMプロバイダーを選択</label>
+                <div className="flex justify-center gap-4">
+                    <button onClick={() => setProvider('gemini')} className={`px-4 py-2 rounded-lg font-semibold w-full transition-colors ${provider === 'gemini' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`} disabled={isProcessing}>Gemini</button>
+                    <button onClick={() => setProvider('openai')} className={`px-4 py-2 rounded-lg font-semibold w-full transition-colors ${provider === 'openai' ? 'bg-teal-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`} disabled={isProcessing}>OpenAI</button>
+                </div>
+            </div>
+            <div>
+                <label htmlFor="apiKey" className="block text-sm font-medium text-gray-300 mb-2">APIキー</label>
+                <input 
+                  type="password"
+                  id="apiKey"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={`${provider === 'gemini' ? 'Gemini' : 'OpenAI'} APIキーを入力してください`}
+                  className="w-full bg-gray-700 border border-gray-600 rounded-lg py-2 px-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                  disabled={isProcessing}
+                />
+            </div>
+        </div>
+      )}
+      
+      {hasEnvApiKey && (
+        <div className="w-full max-w-lg mb-8 p-4 bg-green-800/20 rounded-xl border border-green-600/30">
+          <p className="text-green-400 text-center">
+            <span className="font-semibold">{provider === 'gemini' ? 'Gemini' : 'OpenAI'} API</span> が環境変数から設定されています
+          </p>
+        </div>
+      )}
       
       <div 
         onClick={!isUploadDisabled ? handleClick : undefined}
@@ -149,8 +187,8 @@ const VaultUpload: React.FC<VaultUploadProps> = ({ onFilesSelected, onError, isP
         ) : (
           <>
             <UploadIcon />
-            <span className="mt-4 text-xl font-medium text-gray-300">Vaultフォルダを選択</span>
-            <p className="mt-1 text-sm text-gray-500">{!validateApiKey(apiKey) ? "続行するには有効なAPIキーを入力してください" : "ディレクトリ内のすべての`.md`ファイルが処理されます。"}</p>
+            <span className="mt-4 text-xl font-medium text-gray-300">ナレッジフォルダを選択</span>
+            <p className="mt-1 text-sm text-gray-500">{hasEnvApiKey ? "ディレクトリ内のすべての`.md`ファイルが処理されます。" : (!validateApiKey(apiKey) ? "続行するには有効なAPIキーを入力してください" : "ディレクトリ内のすべての`.md`ファイルが処理されます。")}</p>
           </>
         )}
       </div>

@@ -39,7 +39,7 @@ ${lastQuestion}`;
         { "role": "system", "content": systemInstruction },
         // Map previous messages, converting "model" role to "assistant"
         ...conversationHistory.slice(0, -1).map(msg => ({
-            role: (msg.role === 'model' ? 'assistant' : msg.role),
+            role: (msg.role === 'model' ? 'assistant' : msg.role) as 'user' | 'assistant',
             content: msg.content
         })),
         // Add the final user message, augmented with the retrieved context

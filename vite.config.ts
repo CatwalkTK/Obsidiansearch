@@ -19,7 +19,6 @@ export default defineConfig(({ mode }) => {
         port: 5173,
         strictPort: true,
         cors: true,
-        https: false,
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
@@ -27,14 +26,14 @@ export default defineConfig(({ mode }) => {
         },
         middlewareMode: false,
         hmr: true,
-        ws: true
+        ws: false
       },
       assetsInclude: ['**/*.css'],
       build: {
         rollupOptions: {
           output: {
             assetFileNames: (assetInfo) => {
-              const info = assetInfo.name.split('.');
+              const info = assetInfo.name?.split('.') || [];
               const ext = info[info.length - 1];
               if (/css/i.test(ext)) {
                 return `css/[name]-[hash][extname]`;

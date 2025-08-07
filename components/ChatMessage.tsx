@@ -24,7 +24,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     if (isModel && message.content) {
       // Configure marked with security options
       marked.setOptions({
-        sanitize: false, // We'll handle sanitization separately
         gfm: true,
         breaks: true,
         // Disable HTML rendering to prevent XSS
@@ -36,12 +35,12 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       
       // Override HTML rendering methods to prevent XSS
       renderer.html = () => '';
-      renderer.code = (code: string, language?: string) => {
-        const escapedCode = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        return `<pre><code class="language-${language || ''}">${escapedCode}</code></pre>`;
+      renderer.code = (options: { text: string, lang?: string }) => {
+        const escapedCode = options.text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `<pre><code class="language-${options.lang || ''}">${escapedCode}</code></pre>`;
       };
-      renderer.codespan = (code: string) => {
-        const escapedCode = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      renderer.codespan = (options: { text: string }) => {
+        const escapedCode = options.text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
         return `<code>${escapedCode}</code>`;
       };
 

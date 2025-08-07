@@ -1,4 +1,4 @@
-import { ApiProvider, Message } from '../types';
+import { ApiProvider } from '../types';
 import { GoogleGenAI } from "@google/genai";
 import OpenAI from 'openai';
 
@@ -18,7 +18,7 @@ async function getGeminiAnswerFromGeneralKnowledge(apiKey: string, question: str
       model: model,
       contents: [{ role: 'user', parts: [{ text: prompt }] }]
     });
-    return response.text;
+    return response.text || "回答を生成できませんでした。";
   } catch (error) {
     console.error("Gemini APIの呼び出し中にエラーが発生しました:", error);
     throw error;

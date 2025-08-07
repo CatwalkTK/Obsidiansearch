@@ -51,7 +51,7 @@ ${lastQuestion}`;
             systemInstruction: systemInstruction,
         }
     });
-    return response.text;
+    return response.text || "回答を生成できませんでした。";
   } catch (error) {
     console.error("Gemini APIの呼び出し中にエラーが発生しました:", error);
     if (error instanceof Error) {

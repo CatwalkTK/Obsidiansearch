@@ -28,7 +28,7 @@ async function getGeminiEmbeddings(apiKey: string, texts: string[]): Promise<num
             model: model,
             contents: texts.map(text => ({ parts: [{ text }] })),
         });
-        return response.embeddings.map(embedding => embedding.values);
+        return response.embeddings?.map(embedding => embedding.values).filter((values): values is number[] => values !== undefined) || [];
     } catch (error) {
         console.error("Gemini embedding failed:", error);
         throw new Error("Geminiでの埋め込み生成に失敗しました。");

@@ -9,9 +9,9 @@ import { searchExternalData } from './services/externalDataService';
 import VaultUpload from './components/VaultUpload';
 import ChatInterface from './components/ChatInterface';
 
-// チャンク化の定数
-const MAX_CHUNK_SIZE = 1500; // 文字
-const CHUNK_OVERLAP = 200;  // 文字
+// チャンク化の定数 - 日付検索の精度向上のため調整
+const MAX_CHUNK_SIZE = 1200; // 文字（短くしてより細かい検索を可能に）
+const CHUNK_OVERLAP = 300;  // 文字（重複を増やして情報の欠落を防止）
 
 /**
  * ドキュメントをより小さく、重複するチャンクに分割します。
@@ -39,6 +39,34 @@ const chunkText = (text: string): string[] => {
  * @returns キーワードの配列。
  */
 const extractKeywords = (question: string): string[] => {
+  const normalized = question.normalize('NFKC').toLowerCase();
+  
+  // まず日付表現を抽出・保護する
+  const datePatterns = [
+    // 月日パターン（1月1日、12月31日など）
+    /(\d{1,2}月\d{1,2}日)/g,
+    // 年月日パターン（2024年9月5日など）
+    /(\d{4}年\d{1,2}月\d{1,2}日)/g,
+    // スラッシュ区切り（2024/9/5、9/5など）
+    /(\d{4}\/\d{1,2}\/\d{1,2}|\d{1,2}\/\d{1,2})/g,
+    // ハイフン区切り（2024-09-05、9-5など）
+    /(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}-\d{1,2})/g,
+    // ドット区切り（2024.9.5、9.5など）
+    /(\d{4}\.\d{1,2}\.\d{1,2}|\d{1,2}\.\d{1,2})/g
+  ];
+
+  const protectedDates: string[] = [];
+  let processedQuestion = normalized;
+  
+  // 日付表現を特別なトークンで置換して保護
+  datePatterns.forEach((pattern, index) => {
+    processedQuestion = processedQuestion.replace(pattern, (match) => {
+      const token = `__DATE_${index}_${protectedDates.length}__`;
+      protectedDates.push(match);
+      return token;
+    });
+  });
+
   // 日本語の一般的な助詞、助動詞、記号などのストップワードリスト
   const stopWords = new Set([
     'の', 'に', 'は', 'を', 'が', 'で', 'て', 'ます', 'です', 'ある', 'いる', 'する',
@@ -50,17 +78,73 @@ const extractKeywords = (question: string): string[] => {
   ]);
 
   const stopWordsRegex = new RegExp([...stopWords].join('|'), 'g');
-  const processed = question.normalize('NFKC').toLowerCase().replace(stopWordsRegex, ' ').trim();
+  const processed = processedQuestion.replace(stopWordsRegex, ' ').trim();
 
-  // 連続するスペースを一つにまとめ、スペースで分割してキーワードの配列を作成
+  // スペースで分割してキーワードの配列を作成
   const keywords = processed.split(/\s+/).filter(kw => kw.length > 0);
   
-  // もしキーワードが抽出できなかった場合（非常に短い質問など）、元の質問を返す
-  if (keywords.length === 0 && question.trim().length > 0) {
-      return [question.trim().normalize('NFKC').toLowerCase()];
+  // 保護されたトークンを元の日付表現に戻す
+  const finalKeywords = keywords.map(keyword => {
+    if (keyword.startsWith('__DATE_')) {
+      const match = keyword.match(/__DATE_\d+_(\d+)__/);
+      if (match) {
+        const index = parseInt(match[1]);
+        return protectedDates[index] || keyword;
+      }
+    }
+    return keyword;
+  });
+
+  // もしキーワードが抽出できなかった場合、元の質問を返す
+  if (finalKeywords.length === 0 && question.trim().length > 0) {
+      return [normalized];
   }
 
-  return keywords;
+  return finalKeywords;
+};
+
+/**
+ * 日付表現の様々なバリエーションを生成します。
+ * @param dateStr 元の日付文字列（例: "9月5日"）
+ * @returns 日付の様々な表現形式の配列
+ */
+const generateDateVariations = (dateStr: string): string[] => {
+  const variations = new Set<string>([dateStr]);
+  
+  // "9月5日"のような形式をパース
+  const japaneseDate = dateStr.match(/(\d{1,2})月(\d{1,2})日/);
+  if (japaneseDate) {
+    const month = japaneseDate[1];
+    const day = japaneseDate[2];
+    const paddedMonth = month.padStart(2, '0');
+    const paddedDay = day.padStart(2, '0');
+    
+    // 様々な形式を生成
+    variations.add(`${month}月${day}日`);
+    variations.add(`${paddedMonth}月${paddedDay}日`);
+    variations.add(`${month}/${day}`);
+    variations.add(`${paddedMonth}/${paddedDay}`);
+    variations.add(`${month}-${day}`);
+    variations.add(`${paddedMonth}-${paddedDay}`);
+    variations.add(`${month}.${day}`);
+    variations.add(`${paddedMonth}.${paddedDay}`);
+    
+    // 年を含む可能性も考慮（現在年を想定）
+    const currentYear = new Date().getFullYear();
+    variations.add(`${currentYear}年${month}月${day}日`);
+    variations.add(`${currentYear}/${month}/${day}`);
+    variations.add(`${currentYear}/${paddedMonth}/${paddedDay}`);
+    variations.add(`${currentYear}-${paddedMonth}-${paddedDay}`);
+    variations.add(`${currentYear}.${paddedMonth}.${paddedDay}`);
+    
+    // 前年も考慮
+    variations.add(`${currentYear-1}年${month}月${day}日`);
+    variations.add(`${currentYear-1}/${month}/${day}`);
+    variations.add(`${currentYear-1}/${paddedMonth}/${paddedDay}`);
+    variations.add(`${currentYear-1}-${paddedMonth}-${paddedDay}`);
+  }
+  
+  return Array.from(variations);
 };
 
 /**
@@ -85,8 +169,19 @@ const createContext = (
     // 1. Path Score (ファイルパスとキーワードの一致度)
     let pathScore = 0;
     if (keywords.length > 0) {
-        pathScore = keywords.reduce((acc, keyword) => 
-            acc + (normalizedPath.includes(keyword) ? 1 : 0), 0);
+        pathScore = keywords.reduce((acc, keyword) => {
+            // 日付表現の場合は、様々な形式でマッチングを試行
+            if (keyword.includes('月') && keyword.includes('日')) {
+                const dateVariations = generateDateVariations(keyword);
+                const hasMatch = dateVariations.some(variation => normalizedPath.includes(variation));
+                if (hasMatch) {
+                    // 日付がファイルパスに完全一致する場合は非常に高いスコア
+                    return acc + 5; // 通常の2.5倍
+                }
+                return acc;
+            }
+            return acc + (normalizedPath.includes(keyword) ? 1 : 0);
+        }, 0);
     }
     
     // 2. Semantic Score (意味の近さ)
@@ -95,14 +190,25 @@ const createContext = (
     // 3. Content Score (本文とキーワードの一致度)
     let contentScore = 0;
     if (keywords.length > 0) {
-        contentScore = keywords.reduce((acc, keyword) => 
-            acc + (normalizedContent.includes(keyword) ? 1 : 0), 0);
+        contentScore = keywords.reduce((acc, keyword) => {
+            // 日付表現の場合は、様々な形式でマッチングを試行
+            if (keyword.includes('月') && keyword.includes('日')) {
+                const dateVariations = generateDateVariations(keyword);
+                const hasMatch = dateVariations.some(variation => normalizedContent.includes(variation));
+                if (hasMatch) {
+                    // 日付がコンテンツに一致する場合は高いスコア
+                    return acc + 3; // 通常の1.5倍
+                }
+                return acc;
+            }
+            return acc + (normalizedContent.includes(keyword) ? 1 : 0);
+        }, 0);
     }
 
     // 各スコアの重み付け。パススコアを最も重要視する。
-    const pathWeight = 1.5;
+    const pathWeight = 2.0; // 日付検索では特にパスが重要
     const semanticWeight = 1.0;
-    const contentWeight = 0.5;
+    const contentWeight = 0.8; // コンテンツスコアも少し重視
 
     const finalScore = (pathScore * pathWeight) + (semanticScore * semanticWeight) + (contentScore * contentWeight);
     
@@ -123,13 +229,32 @@ const createContext = (
   }
 
   // セマンティックスコアと統合スコアの両方で判定
-  const MIN_SEMANTIC_THRESHOLD = 0.6; // セマンティック類似度の最小値
-  const MIN_THRESHOLD_SCORE = 0.7; // 統合スコアの最小値
+  // 承認機能を確実に動作させるため、より厳格なしきい値を設定
+  const isDateQuery = /(\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2}|\d{4}-\d{1,2}-\d{1,2})/i.test(question);
+  
+  let MIN_SEMANTIC_THRESHOLD = 0.7; // セマンティック類似度の最小値（承認機能を確実に動作させる）
+  let MIN_THRESHOLD_SCORE = 0.8; // 統合スコアの最小値（承認機能を確実に動作させる）
+  
+  // 日付クエリの場合は大幅に緩和（日付ファイル名のマッチングを優先）
+  if (isDateQuery) {
+    MIN_SEMANTIC_THRESHOLD = 0.3; // 大幅に緩和
+    MIN_THRESHOLD_SCORE = 0.4;    // 大幅に緩和
+  }
   
   const bestChunk = relevantChunks[0];
   const bestSemanticScore = cosineSimilarity(questionEmbedding, bestChunk.chunk.vector);
   
+  // デバッグ用ログ（開発時のみ）
+  console.log(`質問: "${question}"`);
+  console.log(`日付クエリ判定: ${isDateQuery}`);
+  console.log(`最高統合スコア: ${bestChunk.finalScore}, セマンティックスコア: ${bestSemanticScore}`);
+  console.log(`しきい値 - 統合: ${MIN_THRESHOLD_SCORE}, セマンティック: ${MIN_SEMANTIC_THRESHOLD}`);
+  console.log(`統合スコア判定: ${bestChunk.finalScore >= MIN_THRESHOLD_SCORE}`);
+  console.log(`セマンティック判定: ${bestSemanticScore >= MIN_SEMANTIC_THRESHOLD}`);
+  console.log(`最終判定: ${bestChunk.finalScore >= MIN_THRESHOLD_SCORE && bestSemanticScore >= MIN_SEMANTIC_THRESHOLD ? 'コンテキスト採用' : '承認プロンプト表示'}`);
+  
   if (bestChunk.finalScore < MIN_THRESHOLD_SCORE || bestSemanticScore < MIN_SEMANTIC_THRESHOLD) {
+    console.log('コンテキストなし → 承認プロンプト表示予定');
     return null;
   }
   
@@ -242,11 +367,35 @@ const App: React.FC = () => {
     setIsLoading(true);
     setError(null);
     
-    const conversationHistory = [...messages, newUserMessage];
+    // フォローアップ質問の判定
+    const isGenericFollowUp = /^(詳細|詳しく|もっと|なぜ|どうして|他には|それで|その後|つまり|要するに|というのは)/i.test(question.trim());
+    
+    // システムメッセージ（承認プロンプト等）と承認拒否メッセージを会話履歴から除外
+    const filteredMessages = messages.filter(msg => 
+      msg.role !== 'system' && 
+      !(msg.role === 'model' && msg.requiresExternalDataConfirmation === false)
+    );
+    
+    // 各質問を独立して処理するため、会話履歴を最近の数回に制限
+    // または、フォローアップ質問でない場合は単独の質問として処理
+    let conversationHistory: Message[];
+    
+    if (isGenericFollowUp) {
+      // フォローアップ質問の場合は直近の会話を含める（最大3往復）
+      const recentMessages = filteredMessages.slice(-6);
+      conversationHistory = [...recentMessages, newUserMessage];
+      console.log('フォローアップ質問として処理 - 直近の会話履歴を使用');
+    } else {
+      // 独立した質問の場合は、現在の質問のみで処理
+      conversationHistory = [newUserMessage];
+      console.log('独立した質問として処理 - 会話履歴なし');
+    }
+    
+    console.log(`元の会話履歴数: ${messages.length}, フィルタリング後: ${filteredMessages.length}, AIに送信: ${conversationHistory.length}`);
+    console.log('AIに送信される会話履歴:', conversationHistory.map(m => `${m.role}: ${m.content.substring(0, 50)}...`));
 
     try {
       let context: string | null = null;
-      const isGenericFollowUp = /^(詳細|詳しく|もっと|なぜ|どうして|他には|それで|その後|つまり|要するに|というのは)/i.test(question.trim());
 
       if (isGenericFollowUp && lastQueryContext) {
         context = lastQueryContext;
@@ -260,13 +409,21 @@ const App: React.FC = () => {
             const dateFormats = [`${month}.${day}`, `${month}-${day}`, `${month}月${day}日`, `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`, `${year}年${month}月${day}日`, `${year}${String(month).padStart(2, '0')}${String(day).padStart(2, '0')}`];
             searchQuery = `${question} ${dateFormats.join(' ')}`;
         }
+        
+        // 日付表現が含まれる場合、より包括的な検索クエリを作成
+        const dateMatch = question.match(/(\d{1,2})月(\d{1,2})日/);
+        if (dateMatch) {
+            const dateVariations = generateDateVariations(dateMatch[0]);
+            searchQuery = `${question} ${dateVariations.join(' ')}`;
+        }
         const questionEmbedding = (await generateEmbeddings([searchQuery], apiConfig.provider, apiConfig.key, () => {}))[0];
-        const newContext = createContext(searchQuery, questionEmbedding, docChunks);
+        const newContext = createContext(question, questionEmbedding, docChunks);
         context = newContext;
         setLastQueryContext(newContext);
       }
 
       if (!context) {
+        console.log('メインロジック: コンテキストが見つからないため承認プロンプトを表示');
         // 承認プロンプトを表示
         const confirmationMessage: Message = {
           id: Date.now().toString(),
@@ -279,6 +436,8 @@ const App: React.FC = () => {
         setLastQueryContext(null);
         setIsLoading(false);
         return;
+      } else {
+        console.log('メインロジック: コンテキストが見つかったためAIに送信');
       }
       
       let answer = '';
@@ -347,7 +506,8 @@ const App: React.FC = () => {
     const noContextMessage: Message = { 
       id: Date.now().toString(), 
       role: 'model', 
-      content: "提供された社内ナレッジの情報の中から、その質問に対する回答を見つけることができませんでした。" 
+      content: "提供された社内ナレッジの情報の中から、その質問に対する回答を見つけることができませんでした。",
+      requiresExternalDataConfirmation: false // 承認拒否メッセージであることを示すフラグ
     };
     setMessages(prev => [...prev, noContextMessage]);
   }, []);

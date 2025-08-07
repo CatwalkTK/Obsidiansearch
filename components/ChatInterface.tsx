@@ -16,12 +16,15 @@ interface ChatInterfaceProps {
   isTtsEnabled: boolean;
   onTtsToggle: () => void;
   speakingMessageIndex: number | null;
+  onExternalDataApprove?: (messageId: string) => void;
+  onExternalDataDecline?: (messageId: string) => void;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
   messages, onSendMessage, isLoading, fileCount,
   input, onInputChange, isRecording, onToggleRecording,
-  isTtsEnabled, onTtsToggle, speakingMessageIndex
+  isTtsEnabled, onTtsToggle, speakingMessageIndex,
+  onExternalDataApprove, onExternalDataDecline
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -66,7 +69,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       <main className="flex-1 overflow-y-auto p-6">
         <div className="max-w-5xl mx-auto">
           {messages.map((msg, index) => (
-            <ChatMessage key={msg.id} message={msg} isSpeaking={speakingMessageIndex === index} />
+            <ChatMessage 
+              key={msg.id} 
+              message={msg} 
+              isSpeaking={speakingMessageIndex === index}
+              onExternalDataApprove={onExternalDataApprove}
+              onExternalDataDecline={onExternalDataDecline}
+            />
           ))}
           {isLoading && messages.length > 0 && messages[messages.length-1].role === 'user' && (
             <div className="flex items-start gap-4 my-4">

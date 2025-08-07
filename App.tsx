@@ -5,6 +5,7 @@ import { getGeminiAnswer } from './services/geminiService';
 import { getOpenAIAnswer } from './services/openaiService';
 import { generateEmbeddings } from './services/embeddingService';
 import { cosineSimilarity } from './utils/vectorUtils';
+import { searchExternalData } from './services/externalDataService';
 import VaultUpload from './components/VaultUpload';
 import ChatInterface from './components/ChatInterface';
 
@@ -118,6 +119,17 @@ const createContext = (
   const relevantChunks = rankedChunks.slice(0, TOP_K_FINAL);
 
   if (relevantChunks.length === 0) {
+    return null;
+  }
+
+  // セマンティックスコアと統合スコアの両方で判定
+  const MIN_SEMANTIC_THRESHOLD = 0.6; // セマンティック類似度の最小値
+  const MIN_THRESHOLD_SCORE = 0.7; // 統合スコアの最小値
+  
+  const bestChunk = relevantChunks[0];
+  const bestSemanticScore = cosineSimilarity(questionEmbedding, bestChunk.chunk.vector);
+  
+  if (bestChunk.finalScore < MIN_THRESHOLD_SCORE || bestSemanticScore < MIN_SEMANTIC_THRESHOLD) {
     return null;
   }
   
@@ -255,8 +267,15 @@ const App: React.FC = () => {
       }
 
       if (!context) {
-        const noContextMessage: Message = { id: Date.now().toString(), role: 'model', content: "提供された社内ナレッジの情報の中から、その質問に対する回答を見つけることができませんでした。" };
-        setMessages(prev => [...prev, noContextMessage]);
+        // 承認プロンプトを表示
+        const confirmationMessage: Message = {
+          id: Date.now().toString(),
+          role: 'system',
+          content: '',
+          requiresExternalDataConfirmation: true,
+          originalQuestion: question
+        };
+        setMessages(prev => [...prev, confirmationMessage]);
         setLastQueryContext(null);
         setIsLoading(false);
         return;
@@ -279,6 +298,59 @@ const App: React.FC = () => {
       setIsLoading(false);
     }
   }, [docChunks, apiConfig, lastQueryContext, messages]);
+
+  // 外部データ使用の承認ハンドラー
+  const handleExternalDataApprove = useCallback(async (messageId: string) => {
+    if (!apiConfig) return;
+    
+    const confirmationMessage = messages.find(msg => msg.id === messageId);
+    if (!confirmationMessage?.originalQuestion) return;
+
+    setIsLoading(true);
+    
+    try {
+      // 承認メッセージを削除
+      setMessages(prev => prev.filter(msg => msg.id !== messageId));
+      
+      // 外部データから回答を取得
+      const answer = await searchExternalData(
+        confirmationMessage.originalQuestion, 
+        apiConfig.provider, 
+        apiConfig.key
+      );
+      
+      const newModelMessage: Message = { 
+        id: Date.now().toString(), 
+        role: 'model', 
+        content: answer 
+      };
+      setMessages(prev => [...prev, newModelMessage]);
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : '不明なエラーが発生しました。';
+      setError(`外部データの取得に失敗しました: ${errorMessage}`);
+      const newErrorMessage: Message = { 
+        id: Date.now().toString(), 
+        role: 'model', 
+        content: `申し訳ありません、外部データの取得中にエラーが発生しました: ${errorMessage}` 
+      };
+      setMessages(prev => [...prev, newErrorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [messages, apiConfig, setError]);
+
+  // 外部データ使用の拒否ハンドラー
+  const handleExternalDataDecline = useCallback((messageId: string) => {
+    // 承認メッセージを削除し、通常の"見つかりません"メッセージに置き換える
+    setMessages(prev => prev.filter(msg => msg.id !== messageId));
+    
+    const noContextMessage: Message = { 
+      id: Date.now().toString(), 
+      role: 'model', 
+      content: "提供された社内ナレッジの情報の中から、その質問に対する回答を見つけることができませんでした。" 
+    };
+    setMessages(prev => [...prev, noContextMessage]);
+  }, []);
 
   // --- SpeechRecognitionの初期化 ---
   useEffect(() => {
@@ -498,6 +570,8 @@ const App: React.FC = () => {
           isTtsEnabled={isTtsEnabled}
           onTtsToggle={() => setIsTtsEnabled(prev => !prev)}
           speakingMessageIndex={speakingMessageIndex}
+          onExternalDataApprove={handleExternalDataApprove}
+          onExternalDataDecline={handleExternalDataDecline}
         />
       )}
     </div>

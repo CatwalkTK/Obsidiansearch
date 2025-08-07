@@ -2,14 +2,23 @@ import React from 'react';
 import { marked } from 'marked';
 import { Message } from '../types';
 import { BotIcon, UserIcon } from '../constants';
+import ExternalDataPrompt from './ExternalDataPrompt';
 
 interface ChatMessageProps {
   message: Message;
   isSpeaking: boolean;
+  onExternalDataApprove?: (messageId: string) => void;
+  onExternalDataDecline?: (messageId: string) => void;
 }
 
-const ChatMessage: React.FC<ChatMessageProps> = ({ message, isSpeaking }) => {
+const ChatMessage: React.FC<ChatMessageProps> = ({ 
+  message, 
+  isSpeaking, 
+  onExternalDataApprove, 
+  onExternalDataDecline 
+}) => {
   const isModel = message.role === 'model';
+  const isSystem = message.role === 'system';
 
   const createSafeMarkup = () => {
     if (isModel && message.content) {
@@ -58,6 +67,17 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message, isSpeaking }) => {
   };
 
   const speakingClass = isSpeaking ? 'ring-2 ring-indigo-500 shadow-lg' : '';
+
+  // システムメッセージ（承認プロンプト）の場合
+  if (isSystem && message.requiresExternalDataConfirmation && message.originalQuestion) {
+    return (
+      <ExternalDataPrompt
+        question={message.originalQuestion}
+        onApprove={() => onExternalDataApprove?.(message.id)}
+        onDecline={() => onExternalDataDecline?.(message.id)}
+      />
+    );
+  }
 
   return (
     <div className={`flex items-start gap-4 my-4 ${isModel ? '' : 'flex-row-reverse'}`}>

@@ -1,7 +1,9 @@
 export interface Message {
   id: string;
-  role: 'user' | 'model';
+  role: 'user' | 'model' | 'system';
   content: string;
+  requiresExternalDataConfirmation?: boolean;
+  originalQuestion?: string;
 }
 
 export type ApiProvider = 'gemini' | 'openai';

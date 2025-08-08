@@ -69,6 +69,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
 
   // システムメッセージ（承認プロンプト）の場合
   if (isSystem && message.requiresExternalDataConfirmation && message.originalQuestion) {
+    console.log('承認プロンプト表示中:', message.originalQuestion);
     return (
       <ExternalDataPrompt
         question={message.originalQuestion}

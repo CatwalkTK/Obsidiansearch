@@ -232,8 +232,9 @@ const createContext = (
   // 承認機能を確実に動作させるため、より厳格なしきい値を設定
   const isDateQuery = /(\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2}|\d{4}-\d{1,2}-\d{1,2})/i.test(question);
   
-  let MIN_SEMANTIC_THRESHOLD = 0.7; // セマンティック類似度の最小値（承認機能を確実に動作させる）
-  let MIN_THRESHOLD_SCORE = 0.8; // 統合スコアの最小値（承認機能を確実に動作させる）
+  // より確実に承認プロンプトを表示するために、しきい値をさらに厳格に設定
+  let MIN_SEMANTIC_THRESHOLD = 0.75; // セマンティック類似度の最小値（高い類似度を要求）
+  let MIN_THRESHOLD_SCORE = 0.8; // 統合スコアの最小値（高いスコアを要求）
   
   // 日付クエリの場合は大幅に緩和（日付ファイル名のマッチングを優先）
   if (isDateQuery) {
@@ -257,6 +258,8 @@ const createContext = (
     console.log('コンテキストなし → 承認プロンプト表示予定');
     return null;
   }
+  
+  console.log('コンテキスト採用 → AI回答生成');
   
   let context = "";
   // 重複を避けつつ、最も関連性の高いチャンクからコンテキストを構築
@@ -432,7 +435,12 @@ const App: React.FC = () => {
           requiresExternalDataConfirmation: true,
           originalQuestion: question
         };
-        setMessages(prev => [...prev, confirmationMessage]);
+        console.log('承認プロンプトメッセージを追加:', confirmationMessage);
+        setMessages(prev => {
+          const updated = [...prev, confirmationMessage];
+          console.log('メッセージ配列更新後:', updated.length, '件');
+          return updated;
+        });
         setLastQueryContext(null);
         setIsLoading(false);
         return;

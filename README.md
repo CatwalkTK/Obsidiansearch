@@ -177,6 +177,68 @@ AIを活用したWebインターフェースで、社内に蓄積されたナレ
 
 ## トラブルシューティング
 
+### Windows WSL（Windows Subsystem for Linux）での使用
+
+#### 前提条件
+- Windows 10 バージョン 2004 以降、または Windows 11
+- WSL2 がインストールされていること
+- Ubuntu、Debian などの Linux ディストリビューション
+- Node.js v18+ と npm がWSL内にインストールされていること
+
+#### セットアップ手順
+1. **WSL環境でのクローン**:
+   ```bash
+   # WSL内で実行
+   cd ~
+   git clone https://github.com/CatwalkTK/Obsidiansearch.git
+   cd Obsidiansearch
+   ```
+
+2. **依存関係のインストール**:
+   ```bash
+   npm install
+   ```
+
+3. **環境変数の設定**:
+   ```bash
+   # .envファイルを作成
+   nano .env
+   # 以下を追加
+   GEMINI_API_KEY=your_gemini_api_key_here
+   ```
+
+4. **開発サーバーの起動**:
+   ```bash
+   # WSL内のホストバインディング
+   npm run dev -- --host 0.0.0.0
+   ```
+
+#### WSL特有の注意点
+
+**ポートアクセス**:
+- Windowsブラウザからは `http://localhost:5173/` でアクセス可能
+- WSL2の場合、自動的にポート転送が設定されます
+- 接続できない場合は Windows PowerShell で以下を実行:
+  ```powershell
+  netsh interface portproxy add v4tov4 listenport=5173 listenaddress=0.0.0.0 connectport=5173 connectaddress=(wsl hostname -I)
+  ```
+
+**ファイルシステムアクセス**:
+- Markdownファイルは Windows ファイルシステム (`/mnt/c/Users/...`) に配置可能
+- WSL ファイルシステム (`/home/...`) からもアクセス可能
+- ファイル選択時は WSL から Windows のファイルも選択できます
+
+**パフォーマンス最適化**:
+- プロジェクトファイルは WSL ファイルシステム内に配置することを推奨
+- Windows ファイルシステムからの実行は若干パフォーマンスが低下する場合があります
+
+**ファイアウォール設定**:
+```powershell
+# Windows Defender ファイアウォールで Node.js を許可
+# Windows Security > Firewall & network protection > Allow an app through firewall
+# Node.js を追加し、プライベート・パブリック両方をチェック
+```
+
 ### GitHub Codespacesでの使用
 - `localhost:5173`ではなく、Codespacesが提供するURL（例：`https://xxx-5173.app.github.dev/`）を使用してください
 - ポート転送の設定を確認し、必要に応じて公開設定を変更してください

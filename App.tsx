@@ -6,6 +6,7 @@ import { getOpenAIAnswer } from './services/openaiService';
 import { generateEmbeddings } from './services/embeddingService';
 import { cosineSimilarity } from './utils/vectorUtils';
 import { searchExternalData } from './services/externalDataService';
+import { expandKeywordsWithSynonyms, createSynonymExpandedQuery, logKeywordExpansion } from './utils/synonymUtils';
 import VaultUpload from './components/VaultUpload';
 import ChatInterface from './components/ChatInterface';
 
@@ -14,23 +15,78 @@ const MAX_CHUNK_SIZE = 1200; // 文字（短くしてより細かい検索を可
 const CHUNK_OVERLAP = 300;  // 文字（重複を増やして情報の欠落を防止）
 
 /**
- * ドキュメントをより小さく、重複するチャンクに分割します。
+ * ドキュメントを意味的な単位で分割し、重複するチャンクに分割します。
  * @param text - ドキュメントのコンテンツ。
  * @returns テキストチャンクの配列。
  */
 const chunkText = (text: string): string[] => {
     const chunks: string[] = [];
     if (text.length <= MAX_CHUNK_SIZE) {
-        return [text];
+        return [text.trim()];
     }
     
-    let i = 0;
-    while (i < text.length) {
-        const chunk = text.substring(i, i + MAX_CHUNK_SIZE);
-        chunks.push(chunk);
-        i += MAX_CHUNK_SIZE - CHUNK_OVERLAP;
+    // 改行でパラグラフに分割
+    const paragraphs = text.split(/\n\s*\n/);
+    let currentChunk = '';
+    
+    for (const paragraph of paragraphs) {
+        const trimmedParagraph = paragraph.trim();
+        if (!trimmedParagraph) continue;
+        
+        // 現在のチャンクに追加できるかチェック
+        if (currentChunk.length + trimmedParagraph.length + 2 <= MAX_CHUNK_SIZE) {
+            currentChunk += (currentChunk ? '\n\n' : '') + trimmedParagraph;
+        } else {
+            // 現在のチャンクを保存
+            if (currentChunk) {
+                chunks.push(currentChunk);
+            }
+            
+            // パラグラフが大きすぎる場合は文単位で分割
+            if (trimmedParagraph.length > MAX_CHUNK_SIZE) {
+                const sentences = trimmedParagraph.split(/[.｡。!?！？]\s*/);
+                let sentenceChunk = '';
+                
+                for (const sentence of sentences) {
+                    const trimmedSentence = sentence.trim();
+                    if (!trimmedSentence) continue;
+                    
+                    if (sentenceChunk.length + trimmedSentence.length + 1 <= MAX_CHUNK_SIZE) {
+                        sentenceChunk += (sentenceChunk ? ' ' : '') + trimmedSentence;
+                    } else {
+                        if (sentenceChunk) {
+                            chunks.push(sentenceChunk);
+                        }
+                        // 文が長すぎる場合は強制分割
+                        if (trimmedSentence.length > MAX_CHUNK_SIZE) {
+                            let pos = 0;
+                            while (pos < trimmedSentence.length) {
+                                const chunk = trimmedSentence.substring(pos, pos + MAX_CHUNK_SIZE);
+                                chunks.push(chunk);
+                                pos += MAX_CHUNK_SIZE - CHUNK_OVERLAP;
+                            }
+                            sentenceChunk = '';
+                        } else {
+                            sentenceChunk = trimmedSentence;
+                        }
+                    }
+                }
+                if (sentenceChunk) {
+                    currentChunk = sentenceChunk;
+                } else {
+                    currentChunk = '';
+                }
+            } else {
+                currentChunk = trimmedParagraph;
+            }
+        }
     }
-    return chunks;
+    
+    if (currentChunk) {
+        chunks.push(currentChunk);
+    }
+    
+    return chunks.filter(chunk => chunk.trim().length > 0);
 };
 
 /**
@@ -40,6 +96,7 @@ const chunkText = (text: string): string[] => {
  */
 const extractKeywords = (question: string): string[] => {
   const normalized = question.normalize('NFKC').toLowerCase();
+  console.log('🔍 キーワード抽出開始:', question, '→', normalized);
   
   // まず日付表現を抽出・保護する
   const datePatterns = [
@@ -97,9 +154,11 @@ const extractKeywords = (question: string): string[] => {
 
   // もしキーワードが抽出できなかった場合、元の質問を返す
   if (finalKeywords.length === 0 && question.trim().length > 0) {
+      console.log('⚠️ キーワード抽出失敗、元の質問を使用:', [normalized]);
       return [normalized];
   }
 
+  console.log('✅ 抽出されたキーワード:', finalKeywords);
   return finalKeywords;
 };
 
@@ -159,7 +218,13 @@ const createContext = (
   questionEmbedding: number[],
   docChunks: DocChunk[]
 ): string | null => {
-  const keywords = extractKeywords(question);
+  const originalKeywords = extractKeywords(question);
+  
+  // 同義語でキーワードを拡張
+  const expandedKeywords = expandKeywordsWithSynonyms(originalKeywords);
+  logKeywordExpansion(originalKeywords, expandedKeywords);
+  
+  const keywords = expandedKeywords;
   const MAX_CONTEXT_CHARS = 10000;
 
   const scoredChunks = docChunks.map(chunk => {
@@ -174,6 +239,15 @@ const createContext = (
             if (keyword.includes('月') && keyword.includes('日')) {
                 const dateVariations = generateDateVariations(keyword);
                 const hasMatch = dateVariations.some(variation => normalizedPath.includes(variation));
+                if (chunk.path.includes('9月5日') || chunk.path.includes('授業')) {
+                    console.log('🎯 日付ファイルチェック:', {
+                        path: chunk.path,
+                        keyword,
+                        dateVariations,
+                        hasMatch,
+                        normalizedPath
+                    });
+                }
                 if (hasMatch) {
                     // 日付がファイルパスに完全一致する場合は非常に高いスコア
                     return acc + 5; // 通常の2.5倍
@@ -205,10 +279,10 @@ const createContext = (
         }, 0);
     }
 
-    // 各スコアの重み付け。パススコアを最も重要視する。
-    const pathWeight = 2.0; // 日付検索では特にパスが重要
-    const semanticWeight = 1.0;
-    const contentWeight = 0.8; // コンテンツスコアも少し重視
+    // 各スコアの重み付け。セマンティック検索を重視しつつパスも考慮
+    const pathWeight = 1.5; // パスの重要度を下げてバランスを改善
+    const semanticWeight = 2.0; // 意味的検索を最重要視
+    const contentWeight = 1.2; // コンテンツスコアも重視
 
     const finalScore = (pathScore * pathWeight) + (semanticScore * semanticWeight) + (contentScore * contentWeight);
     
@@ -232,34 +306,61 @@ const createContext = (
   // 承認機能を確実に動作させるため、より厳格なしきい値を設定
   const isDateQuery = /(\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2}|\d{4}-\d{1,2}-\d{1,2})/i.test(question);
   
-  // より確実に承認プロンプトを表示するために、しきい値をさらに厳格に設定
-  let MIN_SEMANTIC_THRESHOLD = 0.75; // セマンティック類似度の最小値（高い類似度を要求）
-  let MIN_THRESHOLD_SCORE = 0.8; // 統合スコアの最小値（高いスコアを要求）
+  // ベクター検索の精度を高めるためにしきい値を調整
+  let MIN_SEMANTIC_THRESHOLD = 0.4; // セマンティック類似度の最小値を緩和
+  let MIN_THRESHOLD_SCORE = 0.5; // 統合スコアの最小値を緩和
   
-  // 日付クエリの場合は大幅に緩和（日付ファイル名のマッチングを優先）
+  // 日付クエリの特別判定: パスマッチングがあるかチェック
   if (isDateQuery) {
-    MIN_SEMANTIC_THRESHOLD = 0.3; // 大幅に緩和
-    MIN_THRESHOLD_SCORE = 0.4;    // 大幅に緩和
+    const dateKeywords = keywords.filter(k => k.includes('月') && k.includes('日'));
+    const hasDatePathMatch = dateKeywords.some(dateKeyword => {
+      const dateVariations = generateDateVariations(dateKeyword);
+      return relevantChunks.some(item => 
+        dateVariations.some(variation => item.chunk.path.toLowerCase().includes(variation.toLowerCase()))
+      );
+    });
+    
+    if (hasDatePathMatch) {
+      // 日付ファイルが存在する場合は緩和した判定
+      MIN_SEMANTIC_THRESHOLD = 0.1;
+      MIN_THRESHOLD_SCORE = 0.3;
+      console.log('📅 日付ファイルマッチあり - 緩和した判定を適用');
+    } else {
+      // 日付ファイルが存在しない場合は通常の判定
+      console.log('❌ 日付ファイルマッチなし - 通常の判定を適用');
+    }
   }
   
   const bestChunk = relevantChunks[0];
   const bestSemanticScore = cosineSimilarity(questionEmbedding, bestChunk.chunk.vector);
   
   // デバッグ用ログ（開発時のみ）
+  console.log('📊 検索結果分析:');
   console.log(`質問: "${question}"`);
+  console.log(`抽出キーワード:`, keywords);
   console.log(`日付クエリ判定: ${isDateQuery}`);
   console.log(`最高統合スコア: ${bestChunk.finalScore}, セマンティックスコア: ${bestSemanticScore}`);
+  console.log(`最高スコアファイル: ${bestChunk.chunk.path}`);
   console.log(`しきい値 - 統合: ${MIN_THRESHOLD_SCORE}, セマンティック: ${MIN_SEMANTIC_THRESHOLD}`);
   console.log(`統合スコア判定: ${bestChunk.finalScore >= MIN_THRESHOLD_SCORE}`);
-  console.log(`セマンティック判定: ${bestSemanticScore >= MIN_SEMANTIC_THRESHOLD}`);
-  console.log(`最終判定: ${bestChunk.finalScore >= MIN_THRESHOLD_SCORE && bestSemanticScore >= MIN_SEMANTIC_THRESHOLD ? 'コンテキスト採用' : '承認プロンプト表示'}`);
   
-  if (bestChunk.finalScore < MIN_THRESHOLD_SCORE || bestSemanticScore < MIN_SEMANTIC_THRESHOLD) {
-    console.log('コンテキストなし → 承認プロンプト表示予定');
+  // 統合スコアが非常に高い場合はセマンティック要件を緩和
+  const isHighScore = bestChunk.finalScore >= 5.0; // 非常に高いスコア
+  const relaxedSemanticThreshold = isHighScore ? 0.05 : MIN_SEMANTIC_THRESHOLD;
+  
+  console.log(`セマンティック判定: ${bestSemanticScore >= relaxedSemanticThreshold} (緩和セマンティック: ${relaxedSemanticThreshold})`);
+  console.log('🔝 トップ5チャンク:');
+  relevantChunks.slice(0, 5).forEach((item, i) => {
+    console.log(`  ${i + 1}. ${item.chunk.path} (スコア: ${item.finalScore.toFixed(3)})`);
+  });
+  console.log(`最終判定: ${bestChunk.finalScore >= MIN_THRESHOLD_SCORE && bestSemanticScore >= relaxedSemanticThreshold ? 'コンテキスト採用' : '承認プロンプト表示'}`);
+  
+  if (bestChunk.finalScore < MIN_THRESHOLD_SCORE || bestSemanticScore < relaxedSemanticThreshold) {
+    console.log(`❌ コンテキストなし → 承認プロンプト表示予定 (緩和セマンティック: ${relaxedSemanticThreshold})`);
     return null;
   }
   
-  console.log('コンテキスト採用 → AI回答生成');
+  console.log('✅ コンテキスト採用 → AI回答生成');
   
   let context = "";
   // 重複を避けつつ、最も関連性の高いチャンクからコンテキストを構築
@@ -404,6 +505,8 @@ const App: React.FC = () => {
         context = lastQueryContext;
       } else {
         let searchQuery = question;
+        
+        // 今日の日付処理
         if (/(今日|today)/i.test(question)) {
             const today = new Date();
             const year = today.getFullYear();
@@ -411,6 +514,11 @@ const App: React.FC = () => {
             const day = today.getDate();
             const dateFormats = [`${month}.${day}`, `${month}-${day}`, `${month}月${day}日`, `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`, `${year}年${month}月${day}日`, `${year}${String(month).padStart(2, '0')}${String(day).padStart(2, '0')}`];
             searchQuery = `${question} ${dateFormats.join(' ')}`;
+        } else {
+            // 同義語拡張クエリを作成
+            const originalKeywords = extractKeywords(question);
+            searchQuery = createSynonymExpandedQuery(question, originalKeywords);
+            console.log('🔍 同義語拡張検索クエリ:', searchQuery);
         }
         
         // 日付表現が含まれる場合、より包括的な検索クエリを作成

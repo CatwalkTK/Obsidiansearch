@@ -20,18 +20,30 @@ async function getOpenAIEmbeddings(apiKey: string, texts: string[]): Promise<num
 
 async function getGeminiEmbeddings(apiKey: string, texts: string[]): Promise<number[][]> {
     const ai = new GoogleGenAI({ apiKey });
-    // このタスクには 'text-embedding-004' のような埋め込みモデルを使用します
-    const model = "text-embedding-004";
     
     try {
-        const response = await ai.models.embedContent({
-            model: model,
-            contents: texts.map(text => ({ parts: [{ text }] })),
-        });
-        return response.embeddings?.map(embedding => embedding.values).filter((values): values is number[] => values !== undefined) || [];
+        const embeddings: number[][] = [];
+        
+        // 個別にバッチ処理
+        for (const text of texts) {
+            const result = await ai.models.embedContent({
+                model: "text-embedding-004",
+                contents: [{ parts: [{ text }] }]
+            });
+            
+            if (result.embeddings && result.embeddings[0] && result.embeddings[0].values) {
+                embeddings.push(result.embeddings[0].values);
+            } else {
+                console.warn('埋め込み生成に失敗:', text.substring(0, 50));
+                // ダミーベクトルで継続（768次元）
+                embeddings.push(new Array(768).fill(0));
+            }
+        }
+        
+        return embeddings;
     } catch (error) {
         console.error("Gemini embedding failed:", error);
-        throw new Error("Geminiでの埋め込み生成に失敗しました。");
+        throw new Error("Geminiでの埋め込み生成に失敗しました: " + (error instanceof Error ? error.message : 'Unknown error'));
     }
 }
 

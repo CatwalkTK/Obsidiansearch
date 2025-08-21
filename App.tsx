@@ -6,7 +6,7 @@ import { getOpenAIAnswer } from './services/openaiService';
 import { generateEmbeddings } from './services/embeddingService';
 import { cosineSimilarity } from './utils/vectorUtils';
 import { searchExternalData } from './services/externalDataService';
-import { expandKeywordsWithSynonyms, createSynonymExpandedQuery, logKeywordExpansion } from './utils/synonymUtils';
+// 手動同義語辞書は削除済み - AI動的同義語生成に完全移行
 import { createAIExpandedQuery } from './services/dynamicSynonymService';
 import VaultUpload from './components/VaultUpload';
 import ChatInterface from './components/ChatInterface';
@@ -219,13 +219,8 @@ const createContext = (
   questionEmbedding: number[],
   docChunks: DocChunk[]
 ): string | null => {
-  const originalKeywords = extractKeywords(question);
-  
-  // 同義語でキーワードを拡張
-  const expandedKeywords = expandKeywordsWithSynonyms(originalKeywords);
-  logKeywordExpansion(originalKeywords, expandedKeywords);
-  
-  const keywords = expandedKeywords;
+  // AI同義語システムに移行済み - キーワード抽出のみ使用
+  const keywords = extractKeywords(question);
   const MAX_CONTEXT_CHARS = 10000;
 
   const scoredChunks = docChunks.map(chunk => {
@@ -521,10 +516,9 @@ const App: React.FC = () => {
                 searchQuery = await createAIExpandedQuery(question, apiConfig.provider, apiConfig.key);
             } catch (error) {
                 console.warn('AI同義語生成エラー:', error);
-                // フォールバック: 手動辞書を使用
-                const originalKeywords = extractKeywords(question);
-                searchQuery = createSynonymExpandedQuery(question, originalKeywords);
-                console.log('🔍 フォールバック同義語拡張:', searchQuery);
+                // フォールバック: 元のクエリをそのまま使用
+                console.log('⚠️ AI同義語生成失敗 - 元のクエリを使用:', question);
+                searchQuery = question;
             }
         }
         

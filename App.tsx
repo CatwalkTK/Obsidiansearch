@@ -8,6 +8,7 @@ import { cosineSimilarity } from './utils/vectorUtils';
 import { searchExternalData } from './services/externalDataService';
 // 手動同義語辞書は削除済み - AI動的同義語生成に完全移行
 import { createAIExpandedQuery } from './services/dynamicSynonymService';
+import { generateTopicSummary, type TopicSummary } from './services/summaryService';
 import VaultUpload from './components/VaultUpload';
 import ChatInterface from './components/ChatInterface';
 
@@ -467,6 +468,49 @@ const App: React.FC = () => {
     setIsLoading(true);
     setError(null);
     
+    // 要約リクエストの判定
+    const isSummaryRequest = /^(要約|まとめ|まとめて|概要|総括)\s*[：:]\s*(.+)|(.+)\s*(について|に関して|の)\s*(要約|まとめ|概要|総括)/.test(question.trim());
+    
+    if (isSummaryRequest) {
+      try {
+        // 要約対象のトピックを抽出
+        const topicMatch = question.match(/^(要約|まとめ|まとめて|概要|総括)\s*[：:]\s*(.+)|(.+)\s*(について|に関して|の)\s*(要約|まとめ|概要|総括)/);
+        const topic = topicMatch?.[2] || topicMatch?.[3] || question.replace(/(要約|まとめ|まとめて|概要|総括|について|に関して|の)/g, '').trim();
+        
+        console.log('📝 要約リクエスト検出:', { question, topic });
+        
+        // 要約生成
+        const summaryResult = await generateTopicSummary(
+          {
+            topic,
+            chunks: docChunks,
+            maxLength: 800,
+            includeExamples: true
+          },
+          apiConfig.provider,
+          apiConfig.key
+        );
+        
+        const summaryMessage: Message = { 
+          id: Date.now().toString(), 
+          role: 'model', 
+          content: `「${topic}」についての要約を生成しました。`,
+          summary: summaryResult
+        };
+        
+        setMessages(prev => [...prev, summaryMessage]);
+        setIsLoading(false);
+        return;
+        
+      } catch (error) {
+        console.error('要約生成エラー:', error);
+        const errorMessage = error instanceof Error ? error.message : '要約生成中に不明なエラーが発生しました。';
+        setError(`要約生成に失敗しました: ${errorMessage}`);
+        setIsLoading(false);
+        return;
+      }
+    }
+    
     // フォローアップ質問の判定
     const isGenericFollowUp = /^(詳細|詳しく|もっと|なぜ|どうして|他には|それで|その後|つまり|要するに|というのは)/i.test(question.trim());
     
@@ -849,6 +893,7 @@ const App: React.FC = () => {
           speakingMessageIndex={speakingMessageIndex}
           onExternalDataApprove={handleExternalDataApprove}
           onExternalDataDecline={handleExternalDataDecline}
+          onTopicClick={handleSendMessage}
         />
       )}
     </div>

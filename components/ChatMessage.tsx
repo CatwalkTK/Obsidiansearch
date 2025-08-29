@@ -3,19 +3,22 @@ import { marked } from 'marked';
 import { Message } from '../types';
 import { BotIcon, UserIcon } from '../constants';
 import ExternalDataPrompt from './ExternalDataPrompt';
+import SummaryDisplay from './SummaryDisplay';
 
 interface ChatMessageProps {
   message: Message;
   isSpeaking: boolean;
   onExternalDataApprove?: (messageId: string) => void;
   onExternalDataDecline?: (messageId: string) => void;
+  onTopicClick?: (topic: string) => void;
 }
 
 const ChatMessage: React.FC<ChatMessageProps> = ({ 
   message, 
   isSpeaking, 
   onExternalDataApprove, 
-  onExternalDataDecline 
+  onExternalDataDecline,
+  onTopicClick
 }) => {
   const isModel = message.role === 'model';
   const isSystem = message.role === 'system';
@@ -80,20 +83,32 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   }
 
   return (
-    <div className={`flex items-start gap-4 my-4 ${isModel ? '' : 'flex-row-reverse'}`}>
-      <div className={`flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center ${isModel ? 'bg-indigo-600' : 'bg-gray-600'}`}>
-        {isModel ? <BotIcon /> : <UserIcon />}
+    <div className="my-4">
+      <div className={`flex items-start gap-4 ${isModel ? '' : 'flex-row-reverse'}`}>
+        <div className={`flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center ${isModel ? 'bg-indigo-600' : 'bg-gray-600'}`}>
+          {isModel ? <BotIcon /> : <UserIcon />}
+        </div>
+        <div className={`relative px-4 py-3 rounded-xl max-w-xl lg:max-w-2xl xl:max-w-3xl transition-all ${isModel ? 'bg-gray-700' : 'bg-indigo-700'} ${speakingClass}`}>
+          {isModel ? (
+              <div 
+                  className="markdown-body"
+                  dangerouslySetInnerHTML={createSafeMarkup()}
+              />
+          ) : (
+              <p className="text-white whitespace-pre-wrap">{message.content}</p>
+          )}
+        </div>
       </div>
-      <div className={`relative px-4 py-3 rounded-xl max-w-xl lg:max-w-2xl xl:max-w-3xl transition-all ${isModel ? 'bg-gray-700' : 'bg-indigo-700'} ${speakingClass}`}>
-        {isModel ? (
-            <div 
-                className="markdown-body"
-                dangerouslySetInnerHTML={createSafeMarkup()}
-            />
-        ) : (
-            <p className="text-white whitespace-pre-wrap">{message.content}</p>
-        )}
-      </div>
+      
+      {/* 要約表示 */}
+      {message.summary && (
+        <div className="mt-4 ml-12">
+          <SummaryDisplay 
+            summary={message.summary}
+            onTopicClick={onTopicClick}
+          />
+        </div>
+      )}
     </div>
   );
 };

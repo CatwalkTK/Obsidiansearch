@@ -4,6 +4,7 @@ export interface Message {
   content: string;
   requiresExternalDataConfirmation?: boolean;
   originalQuestion?: string;
+  summary?: import('./services/summaryService').TopicSummary;
 }
 
 export type ApiProvider = 'gemini' | 'openai';

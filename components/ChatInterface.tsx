@@ -18,13 +18,14 @@ interface ChatInterfaceProps {
   speakingMessageIndex: number | null;
   onExternalDataApprove?: (messageId: string) => void;
   onExternalDataDecline?: (messageId: string) => void;
+  onTopicClick?: (topic: string) => void;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
   messages, onSendMessage, isLoading, fileCount,
   input, onInputChange, isRecording, onToggleRecording,
   isTtsEnabled, onTtsToggle, speakingMessageIndex,
-  onExternalDataApprove, onExternalDataDecline
+  onExternalDataApprove, onExternalDataDecline, onTopicClick
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -75,6 +76,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               isSpeaking={speakingMessageIndex === index}
               onExternalDataApprove={onExternalDataApprove}
               onExternalDataDecline={onExternalDataDecline}
+              onTopicClick={onTopicClick}
             />
           ))}
           {isLoading && messages.length > 0 && messages[messages.length-1].role === 'user' && (

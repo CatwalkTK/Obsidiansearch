@@ -2,7 +2,9 @@
 import React, { useRef, useEffect } from 'react';
 import { Message } from '../types';
 import ChatMessage from './ChatMessage';
+import QuestionSuggestions from './QuestionSuggestions';
 import { MicrophoneIcon, SpeakerOnIcon, SpeakerOffIcon } from '../constants';
+import { QuestionCategory } from '../services/questionSuggestionService';
 
 interface ChatInterfaceProps {
   messages: Message[];
@@ -19,13 +21,20 @@ interface ChatInterfaceProps {
   onExternalDataApprove?: (messageId: string) => void;
   onExternalDataDecline?: (messageId: string) => void;
   onTopicClick?: (topic: string) => void;
+  onShowAnalytics?: () => void;
+  questionCategories?: QuestionCategory[];
+  onQuestionClick?: (question: string) => void;
+  isGeneratingQuestions?: boolean;
+  onRefreshQuestions?: () => void;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
   messages, onSendMessage, isLoading, fileCount,
   input, onInputChange, isRecording, onToggleRecording,
   isTtsEnabled, onTtsToggle, speakingMessageIndex,
-  onExternalDataApprove, onExternalDataDecline, onTopicClick
+  onExternalDataApprove, onExternalDataDecline, onTopicClick,
+  onShowAnalytics, questionCategories, onQuestionClick, 
+  isGeneratingQuestions, onRefreshQuestions
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -53,7 +62,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   return (
     <div className="flex flex-col h-full bg-gray-900 text-white">
       <header className="flex-shrink-0 bg-gray-800/50 backdrop-blur-sm p-4 border-b border-gray-700 flex justify-between items-center">
-          <div className="w-10"></div> {/* Spacer */}
+          <div className="flex items-center gap-2">
+            {onShowAnalytics && (
+              <button 
+                onClick={onShowAnalytics} 
+                className="p-2 rounded-full hover:bg-gray-700 transition-colors text-white"
+                aria-label="分析ダッシュボードを開く"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+              </button>
+            )}
+          </div>
           <div className="text-center">
             <h1 className="text-xl font-bold">社内ナレッジ可視化AI</h1>
             <p className="text-sm text-gray-400">{fileCount}個のマークダウンファイルをコンテキストとして読み込みました。</p>
@@ -69,6 +90,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       <main className="flex-1 overflow-y-auto p-6">
         <div className="max-w-5xl mx-auto">
+          {/* Question suggestions - show when there are no messages or after successful search */}
+          {questionCategories && questionCategories.length > 0 && onQuestionClick && (
+            <QuestionSuggestions 
+              categories={questionCategories}
+              onQuestionClick={onQuestionClick}
+              onRefresh={onRefreshQuestions}
+              isLoading={isGeneratingQuestions}
+            />
+          )}
+
           {messages.map((msg, index) => (
             <ChatMessage 
               key={msg.id} 

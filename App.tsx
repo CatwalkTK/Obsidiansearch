@@ -9,8 +9,11 @@ import { searchExternalData } from './services/externalDataService';
 // 手動同義語辞書は削除済み - AI動的同義語生成に完全移行
 import { createAIExpandedQuery } from './services/dynamicSynonymService';
 import { generateTopicSummary, type TopicSummary } from './services/summaryService';
+import { generateSmartQuestions, type QuestionCategory } from './services/questionSuggestionService';
+import { recordSearchEvent } from './services/analyticsService';
 import VaultUpload from './components/VaultUpload';
 import ChatInterface from './components/ChatInterface';
+import AnalyticsDashboard from './components/AnalyticsDashboard';
 
 // チャンク化の定数 - 日付検索の精度向上のため調整
 const MAX_CHUNK_SIZE = 1200; // 文字（短くしてより細かい検索を可能に）
@@ -440,6 +443,12 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [apiConfig, setApiConfig] = useState<{ provider: ApiProvider; key: string } | null>(null);
   const [lastQueryContext, setLastQueryContext] = useState<string | null>(null);
+  
+  // --- 新機能用状態 ---
+  const [questionCategories, setQuestionCategories] = useState<QuestionCategory[]>([]);
+  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [userSearchHistory, setUserSearchHistory] = useState<string[]>([]);
 
   // --- 音声機能用 ---
   const [input, setInput] = useState('');
@@ -463,6 +472,9 @@ const App: React.FC = () => {
 
     if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
     
+    // 検索履歴に追加
+    setUserSearchHistory(prev => [...prev.slice(-19), question]); // 最新20件を保持
+    
     const newUserMessage: Message = { id: Date.now().toString(), role: 'user', content: question };
     setMessages(prev => [...prev, newUserMessage]);
     setIsLoading(true);
@@ -478,6 +490,9 @@ const App: React.FC = () => {
         const topic = topicMatch?.[2] || topicMatch?.[3] || question.replace(/(要約|まとめ|まとめて|概要|総括|について|に関して|の)/g, '').trim();
         
         console.log('📝 要約リクエスト検出:', { question, topic });
+        
+        // アナリティクス記録
+        recordSearchEvent(question, 'summary');
         
         // 要約生成
         const summaryResult = await generateTopicSummary(
@@ -499,6 +514,10 @@ const App: React.FC = () => {
         };
         
         setMessages(prev => [...prev, summaryMessage]);
+        
+        // 要約完了後に質問候補を再生成
+        generateQuestionSuggestions(false);
+        
         setIsLoading(false);
         return;
         
@@ -580,6 +599,10 @@ const App: React.FC = () => {
 
       if (!context) {
         console.log('メインロジック: コンテキストが見つからないため承認プロンプトを表示');
+        
+        // アナリティクス記録（低信頼度検索）
+        recordSearchEvent(question, 'search', 0.1);
+        
         // 承認プロンプトを表示
         const confirmationMessage: Message = {
           id: Date.now().toString(),
@@ -601,6 +624,11 @@ const App: React.FC = () => {
         console.log('メインロジック: コンテキストが見つかったためAIに送信');
       }
       
+      // 成功した検索をアナリティクスに記録
+      const contextFiles = context.match(/--- FILE: (.*?) ---/g)?.map(match => match.replace('--- FILE: ', '').replace(' ---', '')) || [];
+      const confidence = contextFiles.length > 0 ? Math.min(0.9, 0.3 + contextFiles.length * 0.15) : 0.5;
+      recordSearchEvent(question, 'search', confidence, contextFiles);
+
       let answer = '';
       if (apiConfig.provider === 'gemini') {
           answer = await getGeminiAnswer(apiConfig.key, context, conversationHistory);
@@ -609,6 +637,9 @@ const App: React.FC = () => {
       }
       const newModelMessage: Message = { id: Date.now().toString(), role: 'model', content: answer };
       setMessages(prev => [...prev, newModelMessage]);
+      
+      // 検索完了後に質問候補を再生成（バックグラウンドで）
+      generateQuestionSuggestions(false);
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : '不明なエラーが発生しました。';
       setError(`回答の取得に失敗しました: ${errorMessage}`);
@@ -632,6 +663,9 @@ const App: React.FC = () => {
       // 承認メッセージを削除
       setMessages(prev => prev.filter(msg => msg.id !== messageId));
       
+      // 外部データ使用をアナリティクスに記録
+      recordSearchEvent(confirmationMessage.originalQuestion, 'external', 0.8);
+      
       // 外部データから回答を取得
       const answer = await searchExternalData(
         confirmationMessage.originalQuestion, 
@@ -645,6 +679,9 @@ const App: React.FC = () => {
         content: answer 
       };
       setMessages(prev => [...prev, newModelMessage]);
+      
+      // 外部データ検索後に質問候補を更新
+      generateQuestionSuggestions(false);
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : '不明なエラーが発生しました。';
       setError(`外部データの取得に失敗しました: ${errorMessage}`);
@@ -672,6 +709,47 @@ const App: React.FC = () => {
     };
     setMessages(prev => [...prev, noContextMessage]);
   }, []);
+
+  // 質問候補生成関数
+  const generateQuestionSuggestions = useCallback(async (showLoading: boolean = true) => {
+    if (!docChunks || !apiConfig) return;
+    
+    if (showLoading) {
+      setIsGeneratingQuestions(true);
+    }
+    
+    try {
+      const categories = await generateSmartQuestions(
+        docChunks,
+        {
+          maxQuestionsPerCategory: 4,
+          includePersonalized: userSearchHistory.length > 3,
+          userHistory: userSearchHistory
+        },
+        apiConfig.provider,
+        apiConfig.key,
+        userSearchHistory
+      );
+      
+      setQuestionCategories(categories);
+      
+    } catch (error) {
+      console.error('質問候補生成エラー:', error);
+    } finally {
+      if (showLoading) {
+        setIsGeneratingQuestions(false);
+      }
+    }
+  }, [docChunks, apiConfig, userSearchHistory]);
+
+  // 質問候補クリックハンドラー
+  const handleQuestionClick = useCallback((question: string) => {
+    // アナリティクス記録
+    recordSearchEvent(question, 'suggestion_click');
+    
+    // 質問を実行
+    handleSendMessage(question);
+  }, [handleSendMessage]);
 
   // --- SpeechRecognitionの初期化 ---
   useEffect(() => {
@@ -852,6 +930,11 @@ const App: React.FC = () => {
         setMessages([
             { id: Date.now().toString(), role: 'model', content: `こんにちは！社内ナレッジから${files.length}個のファイルを処理し、${newDocChunks.length}個の知識チャンクを準備しました。何を知りたいですか？` }
         ]);
+        
+        // ファイル処理完了後に質問候補を生成
+        setTimeout(() => {
+          generateQuestionSuggestions(true);
+        }, 1000);
 
     } catch (e) {
         const errorMessage = e instanceof Error ? e.message : 'ファイルの処理中に不明なエラーが発生しました。';
@@ -879,22 +962,36 @@ const App: React.FC = () => {
           processingMessage={processingMessage}
         />
       ) : (
-        <ChatInterface 
-          messages={messages}
-          onSendMessage={handleSendMessage}
-          isLoading={isLoading}
-          fileCount={fileCount}
-          input={input}
-          onInputChange={setInput}
-          isRecording={isRecording}
-          onToggleRecording={handleToggleRecording}
-          isTtsEnabled={isTtsEnabled}
-          onTtsToggle={() => setIsTtsEnabled(prev => !prev)}
-          speakingMessageIndex={speakingMessageIndex}
-          onExternalDataApprove={handleExternalDataApprove}
-          onExternalDataDecline={handleExternalDataDecline}
-          onTopicClick={handleSendMessage}
-        />
+        <>
+          <ChatInterface 
+            messages={messages}
+            onSendMessage={handleSendMessage}
+            isLoading={isLoading}
+            fileCount={fileCount}
+            input={input}
+            onInputChange={setInput}
+            isRecording={isRecording}
+            onToggleRecording={handleToggleRecording}
+            isTtsEnabled={isTtsEnabled}
+            onTtsToggle={() => setIsTtsEnabled(prev => !prev)}
+            speakingMessageIndex={speakingMessageIndex}
+            onExternalDataApprove={handleExternalDataApprove}
+            onExternalDataDecline={handleExternalDataDecline}
+            onTopicClick={handleSendMessage}
+            onShowAnalytics={() => setShowAnalytics(true)}
+            questionCategories={questionCategories}
+            onQuestionClick={handleQuestionClick}
+            isGeneratingQuestions={isGeneratingQuestions}
+            onRefreshQuestions={() => generateQuestionSuggestions(true)}
+          />
+          
+          {/* アナリティクスダッシュボード */}
+          {showAnalytics && (
+            <AnalyticsDashboard 
+              onClose={() => setShowAnalytics(false)}
+            />
+          )}
+        </>
       )}
     </div>
   );

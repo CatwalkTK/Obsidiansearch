@@ -221,7 +221,7 @@ async function generateOpenAISummary(prompt: string, apiKey: string): Promise<st
   const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
   
   const response = await openai.chat.completions.create({
-    model: "gpt-4",
+    model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     temperature: 0.3,
     max_tokens: 1500
@@ -300,7 +300,7 @@ ${summary.substring(0, 500)}`;
     } else {
       const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
       const result = await openai.chat.completions.create({
-        model: "gpt-4",
+        model: "gpt-4o",
         messages: [{ role: "user", content: prompt }],
         temperature: 0.2,
         max_tokens: 100

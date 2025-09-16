@@ -92,11 +92,17 @@ const VaultUpload: React.FC<VaultUploadProps> = ({ onFilesSelected, onError, isP
     try {
       const fileData = await Promise.all(
         markdownFiles.map(file => {
-          return new Promise<{path: string, content: string}>((resolve, reject) => {
+          return new Promise<{path: string, absolutePath: string, content: string}>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => {
+              const relativePath = (file as FileWithRelativePath).webkitRelativePath;
+              // 絶対パスを推測（実際のパスが不明なため、一般的なパスを構築）
+              // Windows環境を想定
+              const basePath = 'C:\\Users\\tsuda\\OneDrive\\obsidian';
+              const absolutePath = relativePath ? `${basePath}\\${relativePath.replace(/\//g, '\\')}` : `${basePath}\\${file.name}`;
               resolve({
-                  path: (file as FileWithRelativePath).webkitRelativePath,
+                  path: relativePath,
+                  absolutePath: absolutePath,
                   content: reader.result as string
               });
             };

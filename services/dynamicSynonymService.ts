@@ -145,7 +145,7 @@ async function getOpenAISynonyms(keyword: string, apiKey: string): Promise<strin
 出力形式: 同義語1,同義語2,同義語3（説明不要）`;
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4",
+    model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     temperature: 0.3,
     max_tokens: 100

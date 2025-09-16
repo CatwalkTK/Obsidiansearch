@@ -2,9 +2,7 @@
 import React, { useRef, useEffect } from 'react';
 import { Message } from '../types';
 import ChatMessage from './ChatMessage';
-import QuestionSuggestions from './QuestionSuggestions';
 import { MicrophoneIcon, SpeakerOnIcon, SpeakerOffIcon } from '../constants';
-import { QuestionCategory } from '../services/questionSuggestionService';
 
 interface ChatInterfaceProps {
   messages: Message[];
@@ -22,10 +20,8 @@ interface ChatInterfaceProps {
   onExternalDataDecline?: (messageId: string) => void;
   onTopicClick?: (topic: string) => void;
   onShowAnalytics?: () => void;
-  questionCategories?: QuestionCategory[];
-  onQuestionClick?: (question: string) => void;
-  isGeneratingQuestions?: boolean;
-  onRefreshQuestions?: () => void;
+  onFileClick?: (filePath: string) => void;
+  docChunks?: import('../types').DocChunk[];
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
@@ -33,8 +29,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   input, onInputChange, isRecording, onToggleRecording,
   isTtsEnabled, onTtsToggle, speakingMessageIndex,
   onExternalDataApprove, onExternalDataDecline, onTopicClick,
-  onShowAnalytics, questionCategories, onQuestionClick, 
-  isGeneratingQuestions, onRefreshQuestions
+  onShowAnalytics, onFileClick, docChunks
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -90,15 +85,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       <main className="flex-1 overflow-y-auto p-6">
         <div className="max-w-5xl mx-auto">
-          {/* Question suggestions - show when there are no messages or after successful search */}
-          {questionCategories && questionCategories.length > 0 && onQuestionClick && (
-            <QuestionSuggestions 
-              categories={questionCategories}
-              onQuestionClick={onQuestionClick}
-              onRefresh={onRefreshQuestions}
-              isLoading={isGeneratingQuestions}
-            />
-          )}
 
           {messages.map((msg, index) => (
             <ChatMessage 
@@ -108,6 +94,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               onExternalDataApprove={onExternalDataApprove}
               onExternalDataDecline={onExternalDataDecline}
               onTopicClick={onTopicClick}
+              onFileClick={onFileClick}
+              docChunks={docChunks}
             />
           ))}
           {isLoading && messages.length > 0 && messages[messages.length-1].role === 'user' && (

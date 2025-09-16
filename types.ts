@@ -11,7 +11,8 @@ export type ApiProvider = 'gemini' | 'openai';
 
 // ドキュメントのチャンクと、そのベクトル表現。
 export interface DocChunk {
-  path: string;
+  path: string;           // 相対パス（表示用）
+  absolutePath: string;   // 絶対パス（ファイル開く用）
   content: string;
   vector: number[];
 }

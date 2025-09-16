@@ -11,6 +11,8 @@ interface ChatMessageProps {
   onExternalDataApprove?: (messageId: string) => void;
   onExternalDataDecline?: (messageId: string) => void;
   onTopicClick?: (topic: string) => void;
+  onFileClick?: (filePath: string) => void;
+  docChunks?: import('../types').DocChunk[];
 }
 
 const ChatMessage: React.FC<ChatMessageProps> = ({ 
@@ -18,7 +20,9 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   isSpeaking, 
   onExternalDataApprove, 
   onExternalDataDecline,
-  onTopicClick
+  onTopicClick,
+  onFileClick,
+  docChunks
 }) => {
   const isModel = message.role === 'model';
   const isSystem = message.role === 'system';
@@ -53,7 +57,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       }) as string;
       
       // Additional HTML sanitization - remove potentially dangerous elements
-      const sanitizedMarkup = rawMarkup
+      let sanitizedMarkup = rawMarkup
         .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
         .replace(/<iframe\b[^>]*>/gi, '')
         .replace(/<object\b[^>]*>/gi, '')
@@ -62,6 +66,14 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         .replace(/<input\b[^>]*>/gi, '')
         .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '') // Remove event handlers
         .replace(/javascript:/gi, ''); // Remove javascript: URLs
+      
+      // ファイルパス部分をクリック可能にする
+      if (onFileClick) {
+        sanitizedMarkup = sanitizedMarkup.replace(
+          /ファイル「([^」]+)」/g, 
+          '<span class="file-reference cursor-pointer text-blue-400 hover:text-blue-300 underline" data-file-path="$1">ファイル「$1」</span>'
+        );
+      }
 
       return { __html: sanitizedMarkup };
     }
@@ -69,6 +81,22 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   };
 
   const speakingClass = isSpeaking ? 'ring-2 ring-indigo-500 shadow-lg' : '';
+
+  // ファイル参照クリック処理
+  const handleFileClick = (event: React.MouseEvent) => {
+    if (!onFileClick || !docChunks) return;
+    
+    const target = event.target as HTMLElement;
+    if (target.classList.contains('file-reference')) {
+      const relativePath = target.getAttribute('data-file-path');
+      if (relativePath) {
+        // docChunksから相対パスに対応する絶対パスを検索
+        const matchingChunk = docChunks.find(chunk => chunk.path === relativePath);
+        const absolutePath = matchingChunk?.absolutePath || relativePath;
+        onFileClick(absolutePath);
+      }
+    }
+  };
 
   // システムメッセージ（承認プロンプト）の場合
   if (isSystem && message.requiresExternalDataConfirmation && message.originalQuestion) {
@@ -93,6 +121,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
               <div 
                   className="markdown-body"
                   dangerouslySetInnerHTML={createSafeMarkup()}
+                  onClick={handleFileClick}
               />
           ) : (
               <p className="text-white whitespace-pre-wrap">{message.content}</p>

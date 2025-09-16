@@ -9,7 +9,6 @@ import { searchExternalData } from './services/externalDataService';
 // 手動同義語辞書は削除済み - AI動的同義語生成に完全移行
 import { createAIExpandedQuery } from './services/dynamicSynonymService';
 import { generateTopicSummary, type TopicSummary } from './services/summaryService';
-import { generateSmartQuestions, type QuestionCategory } from './services/questionSuggestionService';
 import { recordSearchEvent } from './services/analyticsService';
 import VaultUpload from './components/VaultUpload';
 import ChatInterface from './components/ChatInterface';
@@ -103,55 +102,69 @@ const extractKeywords = (question: string): string[] => {
   const normalized = question.normalize('NFKC').toLowerCase();
   console.log('🔍 キーワード抽出開始:', question, '→', normalized);
   
-  // まず日付表現を抽出・保護する
-  const datePatterns = [
-    // 月日パターン（1月1日、12月31日など）
+  // 重要なパターンを保護（日付、エラーコード、数値など）
+  const protectedPatterns = [
+    // 日付パターン
     /(\d{1,2}月\d{1,2}日)/g,
-    // 年月日パターン（2024年9月5日など）
     /(\d{4}年\d{1,2}月\d{1,2}日)/g,
-    // スラッシュ区切り（2024/9/5、9/5など）
     /(\d{4}\/\d{1,2}\/\d{1,2}|\d{1,2}\/\d{1,2})/g,
-    // ハイフン区切り（2024-09-05、9-5など）
     /(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}-\d{1,2})/g,
-    // ドット区切り（2024.9.5、9.5など）
-    /(\d{4}\.\d{1,2}\.\d{1,2}|\d{1,2}\.\d{1,2})/g
+    /(\d{4}\.\d{1,2}\.\d{1,2}|\d{1,2}\.\d{1,2})/g,
+    // エラーコードパターン（E120, ERR001, ERROR-123など）
+    /([a-zA-Z]+\d+)/g,
+    /([a-zA-Z]+-\d+)/g,
+    /([a-zA-Z]+_\d+)/g,
+    // 純粋な数値（バージョン番号、IDなど）
+    /(\d+\.?\d*)/g
   ];
 
-  const protectedDates: string[] = [];
+  const protectedTokens: string[] = [];
   let processedQuestion = normalized;
   
-  // 日付表現を特別なトークンで置換して保護
-  datePatterns.forEach((pattern, index) => {
+  // 重要パターンを特別なトークンで置換して保護
+  protectedPatterns.forEach((pattern, patternIndex) => {
     processedQuestion = processedQuestion.replace(pattern, (match) => {
-      const token = `__DATE_${index}_${protectedDates.length}__`;
-      protectedDates.push(match);
+      const token = `__PROTECTED_${patternIndex}_${protectedTokens.length}__`;
+      protectedTokens.push(match);
       return token;
     });
   });
 
-  // 日本語の一般的な助詞、助動詞、記号などのストップワードリスト
+  // 日本語の一般的な助詞、助動詞、記号などのストップワードリスト（数値や英字を除く）
+  // 日付クエリでは「は」「？」も重要な場合があるため、より慎重に除去
   const stopWords = new Set([
-    'の', 'に', 'は', 'を', 'が', 'で', 'て', 'ます', 'です', 'ある', 'いる', 'する',
+    'の', 'に', 'を', 'が', 'で', 'て', 'ます', 'です', 'ある', 'いる', 'する',
     'から', 'まで', 'とも', 'として', 'もの', 'こと', 'という', 'といった', 'について',
     '関して', '対して', 'ため', 'よう', 'みたい', 'らしい', 'なら', 'そして', 'また',
     'しかし', 'それで', 'なお', 'および', 'あるいは', 'または', 'かつ',
     'ください', 'おしえ', '教え', '何', 'どの', 'どこ', '誰', 'いつ',
-    '、', '。', '？', '！', '「', '」', '（', '）', ' ', '　'
+    '、', '。', '「', '」', '（', '）', ' ', '　'
+    // '？'と'は'は意図的に除外（日付クエリで重要）
   ]);
 
-  const stopWordsRegex = new RegExp([...stopWords].join('|'), 'g');
-  const processed = processedQuestion.replace(stopWordsRegex, ' ').trim();
+  // ストップワード除去（保護されたトークンは除外）
+  // 保護されたトークンを含まない単語のみストップワード除去
+  const words = processedQuestion.split(/\s+/);
+  const filteredWords = words.map(word => {
+    if (word.startsWith('__PROTECTED_')) {
+      return word; // 保護されたトークンはそのまま
+    }
+    // ストップワードを除去
+    return stopWords.has(word) ? '' : word;
+  }).filter(word => word.length > 0);
+  
+  const processed = filteredWords.join(' ').trim();
 
   // スペースで分割してキーワードの配列を作成
   const keywords = processed.split(/\s+/).filter(kw => kw.length > 0);
   
-  // 保護されたトークンを元の日付表現に戻す
+  // 保護されたトークンを元の表現に戻す
   const finalKeywords = keywords.map(keyword => {
-    if (keyword.startsWith('__DATE_')) {
-      const match = keyword.match(/__DATE_\d+_(\d+)__/);
+    if (keyword.startsWith('__PROTECTED_')) {
+      const match = keyword.match(/__PROTECTED_\d+_(\d+)__/);
       if (match) {
         const index = parseInt(match[1]);
-        return protectedDates[index] || keyword;
+        return protectedTokens[index] || keyword;
       }
     }
     return keyword;
@@ -239,22 +252,56 @@ const createContext = (
             if (keyword.includes('月') && keyword.includes('日')) {
                 const dateVariations = generateDateVariations(keyword);
                 const hasMatch = dateVariations.some(variation => normalizedPath.includes(variation));
-                if (chunk.path.includes('9月5日') || chunk.path.includes('授業')) {
-                    console.log('🎯 日付ファイルチェック:', {
-                        path: chunk.path,
-                        keyword,
-                        dateVariations,
-                        hasMatch,
-                        normalizedPath
-                    });
-                }
+                
+                // デバッグログを詳細化
+                console.log('🎯 日付パスマッチング詳細:', {
+                    path: chunk.path,
+                    normalizedPath,
+                    keyword,
+                    dateVariations,
+                    hasMatch,
+                    pathIncludesDate: dateVariations.map(v => ({ variation: v, included: normalizedPath.includes(v) }))
+                });
+                
                 if (hasMatch) {
                     // 日付がファイルパスに完全一致する場合は非常に高いスコア
                     return acc + 5; // 通常の2.5倍
                 }
                 return acc;
             }
-            return acc + (normalizedPath.includes(keyword) ? 1 : 0);
+            
+            // エラーコードの場合はファイルパスでも大文字小文字を考慮
+            if (/^[a-zA-Z]+\d+$/.test(keyword)) {
+                const upperKeyword = keyword.toUpperCase();
+                const lowerKeyword = keyword.toLowerCase();
+                const hasMatch = normalizedPath.includes(lowerKeyword) || 
+                                normalizedPath.includes(upperKeyword) ||
+                                chunk.path.includes(upperKeyword); // 元のケースでも確認
+                if (hasMatch) {
+                    return acc + 6; // パスでのエラーコード一致は最高スコア
+                }
+                return acc;
+            }
+            
+            // 純粋な数値もパスで確認
+            if (/^\d+\.?\d*$/.test(keyword)) {
+                const hasMatch = normalizedPath.includes(keyword) || chunk.path.includes(keyword);
+                if (hasMatch) {
+                    return acc + 3; // パスでの数値一致
+                }
+                return acc;
+            }
+            
+            // その他のキーワードの処理（より柔軟なマッチング）
+            const hasExactMatch = normalizedPath.includes(keyword);
+            const hasPartialMatch = chunk.path.includes(keyword); // 元のケースでも確認
+            
+            if (hasExactMatch || hasPartialMatch) {
+                console.log('📝 通常キーワードマッチ:', { path: chunk.path, keyword, exact: hasExactMatch, partial: hasPartialMatch });
+                return acc + 1;
+            }
+            
+            return acc;
         }, 0);
     }
     
@@ -275,14 +322,62 @@ const createContext = (
                 }
                 return acc;
             }
+            
+            // エラーコードや数値の場合は大文字小文字を含む様々な形式でマッチング
+            if (/^[a-zA-Z]+\d+$/.test(keyword)) {
+                // エラーコード（E120, ERR001など）の場合
+                const upperKeyword = keyword.toUpperCase();
+                const lowerKeyword = keyword.toLowerCase();
+                const hasMatch = normalizedContent.includes(lowerKeyword) || 
+                                normalizedContent.includes(upperKeyword) ||
+                                chunk.content.includes(upperKeyword); // 元のケースでも確認
+                if (hasMatch) {
+                    return acc + 4; // エラーコードの完全一致は高スコア
+                }
+                return acc;
+            }
+            
+            // 純粋な数値の場合も厳密にマッチング
+            if (/^\d+\.?\d*$/.test(keyword)) {
+                const hasMatch = normalizedContent.includes(keyword) || chunk.content.includes(keyword);
+                if (hasMatch) {
+                    return acc + 2; // 数値の一致
+                }
+                return acc;
+            }
+            
             return acc + (normalizedContent.includes(keyword) ? 1 : 0);
         }, 0);
     }
 
+    // 短いテクニカルクエリ（エラーコードなど）かどうかをチャンクレベルで判定
+    const hasExactTechnicalMatch = keywords.some(kw => {
+      if (/^[a-zA-Z]+\d+$/.test(kw)) {
+        const upperKw = kw.toUpperCase();
+        const lowerKw = kw.toLowerCase();
+        return chunk.content.includes(upperKw) || chunk.content.includes(lowerKw) || 
+               chunk.path.includes(upperKw) || chunk.path.includes(lowerKw);
+      }
+      return false;
+    });
+
     // 各スコアの重み付け。セマンティック検索を重視しつつパスも考慮
-    const pathWeight = 1.5; // パスの重要度を下げてバランスを改善
-    const semanticWeight = 2.0; // 意味的検索を最重要視
-    const contentWeight = 1.2; // コンテンツスコアも重視
+    let pathWeight = 1.5; // パスの重要度を下げてバランスを改善
+    let semanticWeight = 2.0; // 意味的検索を最重要視
+    let contentWeight = 1.2; // コンテンツスコアも重視
+    
+    // 短いテクニカルクエリで完全一致がある場合は、コンテンツスコアを最重要視
+    if (hasExactTechnicalMatch && question.trim().length < 20) {
+      pathWeight = 2.0;
+      semanticWeight = 1.0; // セマンティックスコアの重要度を下げる
+      contentWeight = 3.0; // コンテンツスコアを最重要視
+      console.log('🎯 テクニカル完全一致検出 - 重み調整:', { 
+        chunk: chunk.path, 
+        pathWeight, 
+        semanticWeight, 
+        contentWeight 
+      });
+    }
 
     const finalScore = (pathScore * pathWeight) + (semanticScore * semanticWeight) + (contentScore * contentWeight);
     
@@ -306,28 +401,53 @@ const createContext = (
   // 承認機能を確実に動作させるため、より厳格なしきい値を設定
   const isDateQuery = /(\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2}|\d{4}-\d{1,2}-\d{1,2})/i.test(question);
   
+  // 短いテクニカルクエリ（エラーコードなど）の判定
+  const isShortTechnicalQuery = keywords.some(kw => /^[a-zA-Z]+\d+$/.test(kw)) && question.trim().length < 20;
+  
   // ベクター検索の精度を高めるためにしきい値を調整
   let MIN_SEMANTIC_THRESHOLD = 0.4; // セマンティック類似度の最小値を緩和
   let MIN_THRESHOLD_SCORE = 0.5; // 統合スコアの最小値を緩和
   
+  // 短いテクニカルクエリの場合は閾値を大幅に緩和
+  if (isShortTechnicalQuery) {
+    MIN_SEMANTIC_THRESHOLD = 0.1;
+    MIN_THRESHOLD_SCORE = 0.2;
+    console.log('🔧 短いテクニカルクエリ検出 - 閾値を緩和:', { question, keywords });
+  }
+  
   // 日付クエリの特別判定: パスマッチングがあるかチェック
   if (isDateQuery) {
     const dateKeywords = keywords.filter(k => k.includes('月') && k.includes('日'));
+    
+    // 日付ファイルのマッチングをより詳細にチェック
     const hasDatePathMatch = dateKeywords.some(dateKeyword => {
       const dateVariations = generateDateVariations(dateKeyword);
-      return relevantChunks.some(item => 
-        dateVariations.some(variation => item.chunk.path.toLowerCase().includes(variation.toLowerCase()))
-      );
+      console.log('🗓️ 日付バリエーション確認:', { dateKeyword, dateVariations });
+      
+      const matchingChunks = relevantChunks.filter(item => {
+        const pathLower = item.chunk.path.toLowerCase();
+        const hasVariationMatch = dateVariations.some(variation => pathLower.includes(variation.toLowerCase()));
+        
+        if (hasVariationMatch) {
+          console.log('✅ 日付マッチ発見:', { path: item.chunk.path, variation: dateVariations.find(v => pathLower.includes(v.toLowerCase())) });
+        }
+        
+        return hasVariationMatch;
+      });
+      
+      return matchingChunks.length > 0;
     });
     
     if (hasDatePathMatch) {
-      // 日付ファイルが存在する場合は緩和した判定
-      MIN_SEMANTIC_THRESHOLD = 0.1;
-      MIN_THRESHOLD_SCORE = 0.3;
-      console.log('📅 日付ファイルマッチあり - 緩和した判定を適用');
+      // 日付ファイルが存在する場合は大幅に緩和した判定
+      MIN_SEMANTIC_THRESHOLD = 0.05; // さらに緩和
+      MIN_THRESHOLD_SCORE = 0.1; // さらに緩和
+      console.log('📅 日付ファイルマッチあり - 大幅に緩和した判定を適用');
     } else {
-      // 日付ファイルが存在しない場合は通常の判定
-      console.log('❌ 日付ファイルマッチなし - 通常の判定を適用');
+      // 日付ファイルが存在しない場合でも日付クエリなら少し緩和
+      MIN_SEMANTIC_THRESHOLD = 0.2;
+      MIN_THRESHOLD_SCORE = 0.3;
+      console.log('📅 日付クエリ検出 - 緩和した判定を適用（ファイルマッチなし）');
     }
   }
   
@@ -346,7 +466,13 @@ const createContext = (
   
   // 統合スコアが非常に高い場合はセマンティック要件を緩和
   const isHighScore = bestChunk.finalScore >= 5.0; // 非常に高いスコア
-  const relaxedSemanticThreshold = isHighScore ? 0.05 : MIN_SEMANTIC_THRESHOLD;
+  let relaxedSemanticThreshold = isHighScore ? 0.05 : MIN_SEMANTIC_THRESHOLD;
+  
+  // 日付クエリの場合、さらに緩和した判定を適用
+  if (isDateQuery && bestChunk.finalScore >= 1.0) {
+    relaxedSemanticThreshold = 0.01; // 極度に緩和
+    console.log('📅 日付クエリ特別処理 - 極度に緩和した閾値適用');
+  }
   
   console.log(`セマンティック判定: ${bestSemanticScore >= relaxedSemanticThreshold} (緩和セマンティック: ${relaxedSemanticThreshold})`);
   console.log('🔝 トップ5チャンク:');
@@ -366,7 +492,7 @@ const createContext = (
   // 重複を避けつつ、最も関連性の高いチャンクからコンテキストを構築
   const seenContents = new Set<string>();
   for (const { chunk } of relevantChunks) {
-    const chunkString = `--- FILE: ${chunk.path} ---\n${chunk.content}\n\n`;
+    const chunkString = `--- FILE: ${chunk.absolutePath} ---\n${chunk.content}\n\n`;
     if (!seenContents.has(chunkString)) {
         if (context.length + chunkString.length > MAX_CONTEXT_CHARS) {
             break;
@@ -445,8 +571,6 @@ const App: React.FC = () => {
   const [lastQueryContext, setLastQueryContext] = useState<string | null>(null);
   
   // --- 新機能用状態 ---
-  const [questionCategories, setQuestionCategories] = useState<QuestionCategory[]>([]);
-  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [userSearchHistory, setUserSearchHistory] = useState<string[]>([]);
 
@@ -515,9 +639,6 @@ const App: React.FC = () => {
         
         setMessages(prev => [...prev, summaryMessage]);
         
-        // 要約完了後に質問候補を再生成
-        generateQuestionSuggestions(false);
-        
         setIsLoading(false);
         return;
         
@@ -574,14 +695,28 @@ const App: React.FC = () => {
             const dateFormats = [`${month}.${day}`, `${month}-${day}`, `${month}月${day}日`, `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`, `${year}年${month}月${day}日`, `${year}${String(month).padStart(2, '0')}${String(day).padStart(2, '0')}`];
             searchQuery = `${question} ${dateFormats.join(' ')}`;
         } else {
-            // AI同義語拡張クエリを作成（非同期で高速化）
-            try {
-                searchQuery = await createAIExpandedQuery(question, apiConfig.provider, apiConfig.key);
-            } catch (error) {
-                console.warn('AI同義語生成エラー:', error);
-                // フォールバック: 元のクエリをそのまま使用
-                console.log('⚠️ AI同義語生成失敗 - 元のクエリを使用:', question);
-                searchQuery = question;
+            // 短いテクニカルクエリ（エラーコードなど）の場合は拡張クエリを作成
+            const isShortTechnicalQuery = /^[a-zA-Z]+\d+[は？\?]*$/.test(question.trim());
+            
+            if (isShortTechnicalQuery) {
+                // エラーコードから関連用語を追加
+                const errorCode = question.match(/([a-zA-Z]+\d+)/)?.[1];
+                if (errorCode) {
+                    searchQuery = `${question} ${errorCode} エラーコード 対処法 対処方法 解決方法 トラブルシューティング 異常 故障 センサー`;
+                    console.log('🔧 短いテクニカルクエリ拡張:', { original: question, expanded: searchQuery });
+                } else {
+                    searchQuery = question;
+                }
+            } else {
+                // AI同義語拡張クエリを作成（非同期で高速化）
+                try {
+                    searchQuery = await createAIExpandedQuery(question, apiConfig.provider, apiConfig.key);
+                } catch (error) {
+                    console.warn('AI同義語生成エラー:', error);
+                    // フォールバック: 元のクエリをそのまま使用
+                    console.log('⚠️ AI同義語生成失敗 - 元のクエリを使用:', question);
+                    searchQuery = question;
+                }
             }
         }
         
@@ -589,7 +724,16 @@ const App: React.FC = () => {
         const dateMatch = question.match(/(\d{1,2})月(\d{1,2})日/);
         if (dateMatch) {
             const dateVariations = generateDateVariations(dateMatch[0]);
-            searchQuery = `${question} ${dateVariations.join(' ')}`;
+            // 元のキーワードも保持して検索精度を向上
+            const originalKeywords = extractKeywords(question);
+            const nonDateKeywords = originalKeywords.filter(k => !k.includes('月') || !k.includes('日'));
+            searchQuery = `${question} ${dateVariations.join(' ')} ${nonDateKeywords.join(' ')}`;
+            console.log('📅 日付クエリ拡張:', { 
+                original: question, 
+                dateVariations, 
+                nonDateKeywords,
+                expanded: searchQuery 
+            });
         }
         const questionEmbedding = (await generateEmbeddings([searchQuery], apiConfig.provider, apiConfig.key, () => {}))[0];
         const newContext = createContext(question, questionEmbedding, docChunks);
@@ -635,11 +779,42 @@ const App: React.FC = () => {
       } else {
           answer = await getOpenAIAnswer(apiConfig.key, context, conversationHistory);
       }
+      
+      // AI回答が「見つからない」系の場合は承認プロンプトを表示
+      const noAnswerPatterns = [
+        /提供された.*情報.*回答.*見つけ.*ませんでした/,
+        /コンテキスト.*情報.*含まれていません/,
+        /ドキュメント.*情報.*見つかりません/,
+        /申し訳.*情報.*ありません/,
+        /回答.*見つかりません/,
+        /情報.*見つかりません/,
+        /該当.*情報.*ありません/
+      ];
+      
+      const isNoAnswerResponse = noAnswerPatterns.some(pattern => pattern.test(answer));
+      
+      if (isNoAnswerResponse) {
+        console.log('AI回答が「見つからない」系のため承認プロンプトに切り替え');
+        
+        // アナリティクス記録（低信頼度検索）
+        recordSearchEvent(question, 'search', 0.1);
+        
+        // 承認プロンプトを表示
+        const confirmationMessage: Message = {
+          id: Date.now().toString(),
+          role: 'system',
+          content: '',
+          requiresExternalDataConfirmation: true,
+          originalQuestion: question
+        };
+        setMessages(prev => [...prev, confirmationMessage]);
+        setLastQueryContext(null);
+        setIsLoading(false);
+        return;
+      }
+      
       const newModelMessage: Message = { id: Date.now().toString(), role: 'model', content: answer };
       setMessages(prev => [...prev, newModelMessage]);
-      
-      // 検索完了後に質問候補を再生成（バックグラウンドで）
-      generateQuestionSuggestions(false);
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : '不明なエラーが発生しました。';
       setError(`回答の取得に失敗しました: ${errorMessage}`);
@@ -679,9 +854,6 @@ const App: React.FC = () => {
         content: answer 
       };
       setMessages(prev => [...prev, newModelMessage]);
-      
-      // 外部データ検索後に質問候補を更新
-      generateQuestionSuggestions(false);
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : '不明なエラーが発生しました。';
       setError(`外部データの取得に失敗しました: ${errorMessage}`);
@@ -710,46 +882,6 @@ const App: React.FC = () => {
     setMessages(prev => [...prev, noContextMessage]);
   }, []);
 
-  // 質問候補生成関数
-  const generateQuestionSuggestions = useCallback(async (showLoading: boolean = true) => {
-    if (!docChunks || !apiConfig) return;
-    
-    if (showLoading) {
-      setIsGeneratingQuestions(true);
-    }
-    
-    try {
-      const categories = await generateSmartQuestions(
-        docChunks,
-        {
-          maxQuestionsPerCategory: 4,
-          includePersonalized: userSearchHistory.length > 3,
-          userHistory: userSearchHistory
-        },
-        apiConfig.provider,
-        apiConfig.key,
-        userSearchHistory
-      );
-      
-      setQuestionCategories(categories);
-      
-    } catch (error) {
-      console.error('質問候補生成エラー:', error);
-    } finally {
-      if (showLoading) {
-        setIsGeneratingQuestions(false);
-      }
-    }
-  }, [docChunks, apiConfig, userSearchHistory]);
-
-  // 質問候補クリックハンドラー
-  const handleQuestionClick = useCallback((question: string) => {
-    // アナリティクス記録
-    recordSearchEvent(question, 'suggestion_click');
-    
-    // 質問を実行
-    handleSendMessage(question);
-  }, [handleSendMessage]);
 
   // --- SpeechRecognitionの初期化 ---
   useEffect(() => {
@@ -891,7 +1023,7 @@ const App: React.FC = () => {
   }, [messages, isTtsEnabled, isLoading, handleError]);
 
   
-  const handleFilesSelected = useCallback(async (files: { path: string; content: string }[], provider: ApiProvider, key: string) => {
+  const handleFilesSelected = useCallback(async (files: { path: string; absolutePath: string; content: string }[], provider: ApiProvider, key: string) => {
     setIsProcessing(true);
     setError(null);
     setApiConfig({ provider, key });
@@ -899,13 +1031,17 @@ const App: React.FC = () => {
     
     try {
         setProcessingMessage(`ファイルをチャンク化中 (${files.length}個)...`);
-        const allTextChunks: { path: string; content: string }[] = [];
+        const allTextChunks: { path: string; absolutePath: string; content: string }[] = [];
         for (const file of files) {
             if (!file.content || file.content.trim() === '') continue;
             const chunks = chunkText(file.content);
             for (const chunkContent of chunks) {
                 if (chunkContent.trim() !== '') {
-                    allTextChunks.push({ path: file.path, content: chunkContent });
+                    allTextChunks.push({ 
+                        path: file.path, 
+                        absolutePath: file.absolutePath,
+                        content: chunkContent 
+                    });
                 }
             }
         }
@@ -922,7 +1058,10 @@ const App: React.FC = () => {
         });
 
         const newDocChunks: DocChunk[] = allTextChunks.map((chunk, index) => ({
-            ...chunk, vector: embeddings[index],
+            path: chunk.path,
+            absolutePath: chunk.absolutePath,
+            content: chunk.content,
+            vector: embeddings[index],
         }));
 
         setDocChunks(newDocChunks);
@@ -930,11 +1069,6 @@ const App: React.FC = () => {
         setMessages([
             { id: Date.now().toString(), role: 'model', content: `こんにちは！社内ナレッジから${files.length}個のファイルを処理し、${newDocChunks.length}個の知識チャンクを準備しました。何を知りたいですか？` }
         ]);
-        
-        // ファイル処理完了後に質問候補を生成
-        setTimeout(() => {
-          generateQuestionSuggestions(true);
-        }, 1000);
 
     } catch (e) {
         const errorMessage = e instanceof Error ? e.message : 'ファイルの処理中に不明なエラーが発生しました。';
@@ -979,10 +1113,38 @@ const App: React.FC = () => {
             onExternalDataDecline={handleExternalDataDecline}
             onTopicClick={handleSendMessage}
             onShowAnalytics={() => setShowAnalytics(true)}
-            questionCategories={questionCategories}
-            onQuestionClick={handleQuestionClick}
-            isGeneratingQuestions={isGeneratingQuestions}
-            onRefreshQuestions={() => generateQuestionSuggestions(true)}
+            docChunks={docChunks || undefined}
+            onFileClick={(filePath) => {
+              // ファイルを開く処理
+              console.log('ファイルを開く:', filePath);
+              
+              // ブラウザの制限により直接エクスプローラーを開くことはできません
+              // ファイルパスをクリップボードにコピーして、手動で開いてもらう
+              const handleFileOpen = async () => {
+                try {
+                  // クリップボードにファイルパスをコピー
+                  if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(filePath);
+                    alert(`ファイルパスをクリップボードにコピーしました:\n${filePath}\n\nエクスプローラーのアドレスバーに貼り付けてファイルを開いてください。\n\n手順:\n1. エクスプローラーを開く\n2. アドレスバーに Ctrl+V で貼り付け\n3. Enterキーを押す`);
+                  } else {
+                    // クリップボード API が利用できない場合
+                    const textArea = document.createElement('textarea');
+                    textArea.value = filePath;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    alert(`ファイルパスをクリップボードにコピーしました:\n${filePath}\n\nエクスプローラーのアドレスバーに貼り付けてファイルを開いてください。`);
+                  }
+                } catch (error) {
+                  console.error('クリップボードコピーエラー:', error);
+                  // フォールバック: ファイルパスを選択可能なテキストで表示
+                  const result = prompt(`以下のファイルパスをコピーしてエクスプローラーで開いてください:\n\n(このテキストを選択してCtrl+Cでコピー)`, filePath);
+                }
+              };
+              
+              handleFileOpen();
+            }}
           />
           
           {/* アナリティクスダッシュボード */}
